@@ -5,39 +5,25 @@ import re
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5:7b"
 
-
 SYSTEM_PROMPT = """
 You are an AI agent that decides between using tools or answering directly.
 
 TOOLS:
 
 1. add
-   - description: Adds two integers
-   - arguments:
-       a: integer
-       b: integer
-
 2. reverse_list
-   - description: Reverses a list
-   - arguments:
-       lst: list of integers
 
-3. get_stock_price
-   - description: Get latest stock price
+3. analyze_stock
+   - description: Analyze a stock from natural language input
    - arguments:
-       symbol: stock ticker (e.g. AAPL)
-
-4. get_stock_info
-   - description: Get company info
-   - arguments:
-       symbol: stock ticker
+       query: full user request (e.g. "Analyze Tesla stock")
 
 RULES:
 
-- You MUST respond in valid JSON.
-- You MUST respond in German.
-- You MUST NOT include any text outside JSON.
-- Tool arguments must be correct.
+- You MUST respond in valid JSON
+- You MUST respond in German
+- You MUST NOT include text outside JSON
+- For stock analysis ALWAYS use analyze_stock
 
 FORMAT:
 

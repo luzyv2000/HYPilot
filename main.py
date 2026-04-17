@@ -1,87 +1,25 @@
 from agent.core import query_llm
-from tools.basic import add, reverse_list
-from tools.finance import get_stock_price, get_stock_info
-import re
+from tools.finance import resolve_symbol, get_stock_data
+from tools.analysis import score_stock
 
 
-def extract_numbers(text: str):
-    return [int(x) for x in re.findall(r"-?\d+", text)]
+def analyze_stock(query: str):
+    symbol = resolve_symbol(query)
+    data = get_stock_data(symbol)
+    analysis = score_stock(data)
 
-
-def validate_add_args(args, prompt):
-    if not isinstance(args, dict):
-        return False
-
-    if not isinstance(args.get("a"), int):
-        return False
-
-    if not isinstance(args.get("b"), int):
-        return False
-
-    numbers_in_prompt = extract_numbers(prompt)
-
-    return (
-        args["a"] in numbers_in_prompt and
-        args["b"] in numbers_in_prompt
-    )
-
-
-def validate_reverse_args(args, prompt):
-    if not isinstance(args, dict):
-        return False
-
-    if not isinstance(args.get("lst"), list):
-        return False
-
-    numbers_in_prompt = extract_numbers(prompt)
-
-    return all(x in numbers_in_prompt for x in args["lst"])
-
-
-def validate_stock_args(args):
-    return (
-        isinstance(args, dict) and
-        isinstance(args.get("symbol"), str) and
-        len(args.get("symbol")) > 0
-    )
+    return {
+        "data": data,
+        "analysis": analysis
+    }
 
 
 def agent(prompt: str):
-    decision = query_llm(prompt)
+    if "aktie" in prompt.lower() or "stock" in prompt.lower():
+        result = analyze_stock(prompt)
+        return result
 
-    action = decision.get("action", "answer")
-
-    if action == "tool":
-        tool = decision.get("tool_name")
-        args = decision.get("arguments", {})
-
-        try:
-            if tool == "add":
-                if validate_add_args(args, prompt):
-                    return add(**args)
-                return "Ungültige Argumente für add"
-
-            if tool == "reverse_list":
-                if validate_reverse_args(args, prompt):
-                    return reverse_list(**args)
-                return "Ungültige Argumente für reverse_list"
-
-            if tool == "get_stock_price":
-                if validate_stock_args(args):
-                    return get_stock_price(**args)
-                return "Ungültiges Symbol"
-
-            if tool == "get_stock_info":
-                if validate_stock_args(args):
-                    return get_stock_info(**args)
-                return "Ungültiges Symbol"
-
-            return "Unbekanntes Tool"
-
-        except Exception as e:
-            return f"Tool-Fehler: {str(e)}"
-
-    return decision.get("response", "Keine Antwort")
+    return query_llm(prompt)
 
 
 if __name__ == "__main__":
