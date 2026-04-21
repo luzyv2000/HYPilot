@@ -1,82 +1,102 @@
-import subprocess
+# Dateiname:     ingestion/run_update.py
+# Version:       2026-04-20
+# Abhängigkeiten (intern): ingestion.downloader, ingestion.updater
+# Abhängigkeiten (extern): keine
+"""
+ingestion/run_update.py
+
+Orchestriert die vollständige Update-Pipeline:
+  1. PDF-Download prüfen / herunterladen
+  2. Neue Instrumente in SQLite importieren
+
+Wird täglich via systemd-Timer oder Cron aufgerufen.
+Direkte Python-Aufrufe statt subprocess — kein venv-Pfadproblem.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
 from datetime import datetime
 from pathlib import Path
 
+from ingestion import downloader, updater
 
-BASE_PATH = Path("/home/luzy/workspace/openclaw-min")
-LOG_PATH = BASE_PATH / "logs"
-LOG_FILE = LOG_PATH / "update.log"
+# ── Logging-Konfiguration ─────────────────────────────────────────────────────
 
-
-def ensure_log_dir():
-    LOG_PATH.mkdir(parents=True, exist_ok=True)
+LOG_DIR: Path = Path("/home/luzy/workspace/openclaw-min/logs")
+LOG_FILE: Path = LOG_DIR / "update.log"
 
 
-def log(message: str):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{timestamp}] {message}"
+def _setup_logging() -> None:
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(line)
+    fmt = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
 
-    with open(LOG_FILE, "a") as f:
-        f.write(line + "\n")
+    # Konsole
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(fmt, datefmt=datefmt))
+
+    # Datei (append)
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter(fmt, datefmt=datefmt))
+
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[console_handler, file_handler],
+    )
 
 
-def run_command(cmd: list):
+logger = logging.getLogger(__name__)
+
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
+
+def run_pipeline() -> bool:
+    """
+    Führt die vollständige Update-Pipeline aus.
+
+    Returns:
+        True bei Erfolg, False bei kritischem Fehler.
+    """
+    logger.info("=" * 60)
+    logger.info("START UPDATE-PIPELINE")
+    logger.info("=" * 60)
+
+    # ── Schritt 1: PDF-Download ───────────────────────────────────────────────
+    logger.info("Schritt 1/2: PDF-Download")
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True
+        pdf_ok = downloader.run()
+    except Exception:
+        logger.exception("Unerwarteter Fehler im Downloader.")
+        pdf_ok = False
+
+    if not pdf_ok:
+        logger.critical(
+            "PDF nicht verfügbar — Pipeline wird abgebrochen. "
+            "Kein Update möglich."
         )
-
-        log(f"CMD: {' '.join(cmd)}")
-
-        if result.stdout:
-            log(result.stdout.strip())
-
-        if result.stderr:
-            log(f"[STDERR] {result.stderr.strip()}")
-
-        return result.returncode == 0
-
-    except Exception as e:
-        log(f"[ERROR] Exception: {e}")
         return False
 
-def main():
-    ensure_log_dir()
+    # ── Schritt 2: DB-Update ─────────────────────────────────────────────────
+    logger.info("Schritt 2/2: Datenbank-Update")
+    try:
+        new_count = updater.run()
+        logger.info("Neue Instrumente importiert: %d", new_count)
+    except Exception:
+        logger.exception("Unerwarteter Fehler im Updater.")
+        return False
 
-    log("=== START UPDATE ===")
+    logger.info("=" * 60)
+    logger.info("UPDATE-PIPELINE ABGESCHLOSSEN")
+    logger.info("=" * 60)
+    return True
 
-    # Schritt 1: Download
-    success_download = run_command([
-        "python",
-        "-m",
-        "ingestion.downloader"
-    ])
 
-    pdf_path = BASE_PATH / "data" / "instrument_universe.pdf"
-
-    if not success_download:
-        if pdf_path.exists():
-            log("[WARN] Download fehlgeschlagen → verwende vorhandenes PDF")
-        else:
-            log("[FATAL] Kein PDF vorhanden → Abbruch")
-            return
-
-    # Schritt 2: Update
-    success_update = run_command([
-        "python",
-        "-m",
-        "ingestion.updater"
-    ])
-
-    if not success_update:
-        log("[ERROR] DB Update fehlgeschlagen")
-        return
-
-    log("=== UPDATE COMPLETE ===\n")
+# ── CLI-Einstiegspunkt ────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    _setup_logging()
+    success = run_pipeline()
+    sys.exit(0 if success else 1)
