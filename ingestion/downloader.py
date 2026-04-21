@@ -1,108 +1,147 @@
-import requests
+# Dateiname:     ingestion/downloader.py
+# Version:       2026-04-20
+# Abhängigkeiten (intern): keine
+# Abhängigkeiten (extern): requests
+"""
+ingestion/downloader.py
+
+Lädt das Trade-Republic-Instrument-Universe-PDF herunter und prüft
+via SHA-256-Hash, ob eine neue Version vorliegt.
+Archiviert die bisherige Datei bei Änderung.
+"""
+
+from __future__ import annotations
+
 import hashlib
+import logging
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
-# === Konfiguration ===
-URL = "https://assets.traderepublic.com/assets/files/DE/Instrument_Universe_DE_de.pdf"
+import requests
 
-BASE_PATH = Path("/home/luzy/workspace/openclaw-min")
-DATA_PATH = BASE_PATH / "data"
-PDF_PATH = DATA_PATH / "instrument_universe.pdf"
-HASH_PATH = DATA_PATH / "instrument_universe.hash"
+logger = logging.getLogger(__name__)
+
+# ── Konfiguration ────────────────────────────────────────────────────────────
+
+PDF_URL: str = (
+    "https://assets.traderepublic.com/assets/files/DE/"
+    "Instrument_Universe_DE_de.pdf"
+)
+
+BASE_PATH: Path = Path("/home/luzy/workspace/openclaw-min")
+RAW_PDF_DIR: Path = BASE_PATH / "data" / "raw_pdfs"
+PDF_PATH: Path = RAW_PDF_DIR / "Instrument_Universe_DE_de.pdf"
+HASH_PATH: Path = RAW_PDF_DIR / "Instrument_Universe_DE_de.hash"
+
+_RETRY_COUNT: int = 3
+_RETRY_DELAY_SEC: int = 5
+_TIMEOUT_SEC: int = 30
 
 
-# === Hilfsfunktionen ===
+# ── Interne Hilfsfunktionen ───────────────────────────────────────────────────
 
-def ensure_data_dir():
-    DATA_PATH.mkdir(parents=True, exist_ok=True)
-
-
-def calculate_hash(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
+def _ensure_dirs() -> None:
+    RAW_PDF_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def load_existing_hash():
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _load_stored_hash() -> str | None:
     if not HASH_PATH.exists():
         return None
-
-    with open(HASH_PATH, "r") as f:
-        return f.read().strip()
+    return HASH_PATH.read_text(encoding="utf-8").strip() or None
 
 
-def save_hash(hash_value: str):
-    with open(HASH_PATH, "w") as f:
-        f.write(hash_value)
+def _save_hash(hash_value: str) -> None:
+    HASH_PATH.write_text(hash_value, encoding="utf-8")
 
 
-def archive_old_pdf():
+def _archive_current_pdf() -> None:
+    """Benennt das aktuelle PDF mit Datumspräfix um."""
     if not PDF_PATH.exists():
         return
-
     timestamp = datetime.now().strftime("%Y-%m-%d")
-    archive_name = f"{timestamp}_Instrument_Universe_DE_de.pdf"
-    archive_path = DATA_PATH / archive_name
-
+    archive_path = RAW_PDF_DIR / f"{timestamp}_Instrument_Universe_DE_de.pdf"
+    if archive_path.exists():
+        # Selber Tag: altes Archiv überschreiben (kein Datenverlust, da Hash gleich)
+        archive_path.unlink()
     PDF_PATH.rename(archive_path)
+    logger.info("Alte PDF archiviert: %s", archive_path.name)
 
 
-# === Download mit Retry ===
-
-def download_with_retry(url, retries=3, timeout=20):
-    for attempt in range(retries):
+def _download_with_retry() -> bytes | None:
+    """Führt bis zu _RETRY_COUNT Download-Versuche durch."""
+    for attempt in range(1, _RETRY_COUNT + 1):
         try:
-            response = requests.get(url, timeout=timeout)
-
+            response = requests.get(PDF_URL, timeout=_TIMEOUT_SEC)
             if response.status_code == 200:
                 return response.content
-
-            print(f"[WARN] HTTP {response.status_code}")
-
-        except Exception as e:
-            print(f"[WARN] Versuch {attempt + 1} fehlgeschlagen: {e}")
-
-        time.sleep(2)
-
+            logger.warning(
+                "HTTP %s beim Download (Versuch %d/%d)",
+                response.status_code, attempt, _RETRY_COUNT,
+            )
+        except requests.RequestException as exc:
+            logger.warning(
+                "Download-Fehler Versuch %d/%d: %s",
+                attempt, _RETRY_COUNT, exc,
+            )
+        if attempt < _RETRY_COUNT:
+            time.sleep(_RETRY_DELAY_SEC)
     return None
 
 
-# === Hauptlogik ===
+# ── Öffentliche API ───────────────────────────────────────────────────────────
 
-def main():
-    print("[INFO] Starte Download-Check...")
-    ensure_data_dir()
+def run() -> bool:
+    """
+    Prüft auf neue PDF-Version und lädt sie bei Änderung herunter.
 
-    content = download_with_retry(URL)
+    Returns:
+        True  — PDF vorhanden und verwendbar (neu oder unverändert)
+        False — Download fehlgeschlagen UND kein lokales PDF vorhanden
+    """
+    _ensure_dirs()
+    logger.info("Starte Download-Check: %s", PDF_URL)
 
-    if not content:
-        print("[ERROR] Download endgültig fehlgeschlagen")
+    content = _download_with_retry()
+
+    if content is None:
+        if PDF_PATH.exists():
+            logger.warning(
+                "Download fehlgeschlagen — verwende vorhandenes PDF: %s",
+                PDF_PATH,
+            )
+            return True
+        logger.error("Download fehlgeschlagen und kein lokales PDF vorhanden.")
         return False
 
-    new_hash = calculate_hash(content)
-    old_hash = load_existing_hash()
+    new_hash = _sha256(content)
+    old_hash = _load_stored_hash()
 
     if new_hash == old_hash:
-        print("[INFO] PDF unverändert – kein Download nötig")
+        logger.info("PDF unverändert (Hash identisch) — kein Download nötig.")
         return True
 
-    print("[INFO] Neue Version erkannt – archiviere alte Datei")
+    logger.info("Neue PDF-Version erkannt.")
+    _archive_current_pdf()
 
-    archive_old_pdf()
-
-    with open(PDF_PATH, "wb") as f:
-        f.write(content)
-
-    save_hash(new_hash)
-
-    print("[INFO] Neues PDF gespeichert")
-
+    PDF_PATH.write_bytes(content)
+    _save_hash(new_hash)
+    logger.info("Neue PDF gespeichert: %s", PDF_PATH)
     return True
 
 
-if __name__ == "__main__":
-    success = main()
+# ── CLI-Einstiegspunkt ────────────────────────────────────────────────────────
 
-    # wichtig für Runner (Return-Code)
-    if not success:
-        exit(1)
+if __name__ == "__main__":
+    import sys
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    sys.exit(0 if run() else 1)
