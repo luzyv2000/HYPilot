@@ -1,5 +1,5 @@
 # Dateiname:     core/sources/yfinance_source.py
-# Version:       2026-04-21-fix1
+# Version:       2026-04-22-fix2
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): yfinance
 """
@@ -48,23 +48,23 @@ def _normalize_yield(raw: float | None) -> float | None:
       - Prozentwert: 5.5    → durch 100 dividieren
 
     Grenzwert: Werte > 1.0 werden als Prozentwert behandelt.
-    Plausibilitätsgrenze: > 200% wird als Datenfehler verworfen.
+    Plausibilitätsgrenze: > 99.0 (= 9900%) wird als Datenfehler verworfen.
     """
     if raw is None:
         return None
-    if raw > 2.0:
+    if raw > 99.0:
         logger.warning(
-            "dividendYield = %.4f — unplausibler Wert, wird verworfen.", raw
+            "dividendYield = %.4f — unplausibler Wert (>9900%%), wird verworfen.",
+            raw,
         )
         return None
     if raw > 1.0:
         logger.debug(
-            "dividendYield = %.4f — als Prozentwert interpretiert → %.4f",
+            "dividendYield = %.4f — als Prozentwert interpretiert → %.6f",
             raw, raw / 100,
         )
         return raw / 100
     return raw
-
 
 def _detect_frequency(payments: list[DividendPayment]) -> str | None:
     """Leitet Ausschüttungsfrequenz aus Zahlungsanzahl im letzten Jahr ab."""
