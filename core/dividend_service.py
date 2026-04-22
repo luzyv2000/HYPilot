@@ -1,5 +1,5 @@
 # Dateiname:     core/dividend_service.py
-# Version:       2026-04-21
+# Version:       2026-04-22-C
 # Abhängigkeiten (intern): core.dividend_source, core.ticker_resolver,
 #                          core.sources.yfinance_source,
 #                          db.dividend_repository
@@ -12,7 +12,7 @@ Orchestriert den Dividenden-Datenabruf:
   2. Snapshot + Historie via DividendSource abrufen
   3. Ergebnisse via dividend_repository persistieren
 
-Dies ist der einzige Einstiegspunkt für HYPilot-Analyselogik.
+Einziger Einstiegspunkt für HYPilot-Analyselogik.
 GUI und Agent rufen ausschließlich diesen Service auf.
 """
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from pathlib import Path
+from typing import Callable
 
 from core.dividend_source import DividendSnapshot
 from core.sources.yfinance_source import YFinanceSource
@@ -29,11 +30,14 @@ from db import dividend_repository
 
 logger = logging.getLogger(__name__)
 
-# Standardquelle — kann später erweitert werden
 _DEFAULT_SOURCE = YFinanceSource()
 
 # Rendite-Schwelle für HYPilot-Kernziel (10 %)
 HIGH_YIELD_THRESHOLD = Decimal("0.10")
+
+# Typ für den Fortschritts-Callback
+# Argumente: (processed: int, total: int, current_isin: str, status: str)
+ProgressCallback = Callable[[int, int, str, str], None]
 
 
 # ── Einzelabruf ───────────────────────────────────────────────────────────────
@@ -45,32 +49,24 @@ def update_dividend_data(
     """
     Aktualisiert Dividendendaten für eine einzelne ISIN.
 
-    Ablauf:
-      1. Ticker auflösen
-      2. Snapshot + Historie via Quelle abrufen
-      3. In DB persistieren
-
     Returns:
         DividendSnapshot oder None wenn Ticker nicht auflösbar
         oder keine Daten verfügbar.
     """
     logger.info("Starte Dividenden-Update für %s", isin)
 
-    # Schritt 1: Ticker auflösen
     ticker = ticker_resolver.resolve(isin, db_path=db_path)
     if not ticker:
         logger.warning("Kein Ticker für %s — übersprungen.", isin)
         return None
 
-    # Schritt 2: Daten abrufen
     snapshot = _DEFAULT_SOURCE.fetch_snapshot(isin, ticker)
-    history = _DEFAULT_SOURCE.fetch_history(isin, ticker)
+    history  = _DEFAULT_SOURCE.fetch_history(isin, ticker)
 
     if snapshot is None:
         logger.warning("Keine Snapshot-Daten für %s (%s).", isin, ticker)
         return None
 
-    # Schritt 3: Persistieren
     dividend_repository.upsert_snapshot(snapshot, db_path=db_path)
     new_payments = dividend_repository.insert_history(history, db_path=db_path)
 
@@ -86,12 +82,21 @@ def update_dividend_data(
 def update_batch(
     limit: int = 50,
     db_path: Path = dividend_repository.DB_PATH,
+    progress_callback: ProgressCallback | None = None,
+    stop_flag: Callable[[], bool] | None = None,
 ) -> dict[str, int]:
     """
     Aktualisiert Dividendendaten für ISINs ohne vorhandene Einträge.
 
     Args:
-        limit: Maximale Anzahl ISINs pro Lauf (yfinance ist langsam).
+        limit:             Maximale Anzahl ISINs pro Lauf.
+        db_path:           Pfad zur SQLite-Datenbank.
+        progress_callback: Optionaler Callback für Fortschrittsanzeige.
+                           Signatur: (processed, total, isin, status)
+                           Wird aus Hintergrund-Thread aufgerufen —
+                           darf KEINE GUI-Operationen direkt ausführen.
+        stop_flag:         Optionales Callable das True zurückgibt wenn
+                           der Nutzer den Vorgang abbrechen will.
 
     Returns:
         Dict mit Statistiken: {'processed': N, 'updated': N, 'skipped': N}
@@ -99,18 +104,37 @@ def update_batch(
     isins = dividend_repository.get_isins_without_dividend_data(
         db_path=db_path, limit=limit
     )
-
-    logger.info("Batch-Update: %d ISINs ohne Dividendendaten.", len(isins))
+    total = len(isins)
+    logger.info("Batch-Update: %d ISINs ohne Dividendendaten.", total)
 
     stats = {"processed": 0, "updated": 0, "skipped": 0}
 
     for isin in isins:
+        # Abbruch-Check
+        if stop_flag and stop_flag():
+            logger.info("Batch-Update abgebrochen durch Nutzer.")
+            break
+
         stats["processed"] += 1
+
+        if progress_callback:
+            progress_callback(
+                stats["processed"], total, isin, "wird abgefragt …"
+            )
+
         result = update_dividend_data(isin, db_path=db_path)
+
         if result is not None:
             stats["updated"] += 1
+            status = f"✓ {result.yield_bps} bps" if result.yield_bps else "✓ keine Rendite"
         else:
             stats["skipped"] += 1
+            status = "übersprungen"
+
+        if progress_callback:
+            progress_callback(
+                stats["processed"], total, isin, status
+            )
 
     logger.info(
         "Batch abgeschlossen: %d verarbeitet, %d aktualisiert, %d übersprungen.",
