@@ -1,5 +1,5 @@
 # Dateiname:     analysis/rules.py
-# Version:       2026-04-22
+# Version:       2026-04-22-fix2
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine
 """
@@ -7,11 +7,11 @@ analysis/rules.py
 
 Klassifikation und heuristischer Name-Score für TR-Instrumente.
 
-ETF-Erkennung (mehrschichtig, da TR-Namen selten "ETF" enthalten):
-  1. Schlüsselwort "etf" im Namen
+ETF-Erkennung (rein name-basiert — ISIN-Präfix zu unzuverlässig):
+  1. Schlüsselwort "etf" / "ucits" im Namen
   2. Bekannte ETF-Anbieter (iShares, Vanguard, Xtrackers, ...)
-  3. Struktursuffix (Acc), (Dist) → typisch für UCITS-ETFs
-  4. ISIN-Prefix IE (Irland) oder LU (Luxemburg) → typische ETF-Domizile
+  3. Struktursuffix (Acc) oder (Dist) am Namensende — typisch für
+     UCITS-ETF-Anteilsklassen, selten bei Einzelaktien
 """
 
 from __future__ import annotations
@@ -27,36 +27,31 @@ _ETF_KEYWORDS: frozenset[str] = frozenset({
 _ETF_PROVIDERS: frozenset[str] = frozenset({
     "ishares", "vanguard", "xtrackers", "amundi", "invesco",
     "lyxor", "spdr", "wisdomtree", "vaneck", "dws", "pimco",
-    "flossbach", "dimensional", "hsbc etf",
+    "dimensional", "hsbc etf", "legal & general", "l&g",
+    "fidelity index", "jp morgan etf", "blackrock",
 })
 
-_ETF_ISIN_PREFIXES: frozenset[str] = frozenset({
-    "IE",   # Irland — häufigster ETF-Domizil
-    "LU",   # Luxemburg
-})
-
+# (Acc) oder (Dist) am Ende — starkes ETF-Signal, kaum Fehlalarme
 _ETF_SUFFIX_PATTERN: re.Pattern[str] = re.compile(
-    r"\((acc|dist|hedged|swap)\)", re.IGNORECASE
+    r"\((acc|dist)\)\s*$", re.IGNORECASE
 )
 
 
-def _is_etf(name: str, isin: str) -> bool:
+def _is_etf(name: str) -> bool:
+    """
+    Erkennt ETFs rein über den Namen.
+    ISIN-Präfix wird bewusst nicht verwendet (IE = Irland,
+    auch Domizil vieler Einzelaktien → zu viele Fehlalarme).
+    """
     name_lower = name.lower()
 
-    # Direktes Schlüsselwort
     if any(kw in name_lower for kw in _ETF_KEYWORDS):
         return True
 
-    # Bekannter Anbieter
     if any(p in name_lower for p in _ETF_PROVIDERS):
         return True
 
-    # Struktursuffix (Acc)/(Dist)
     if _ETF_SUFFIX_PATTERN.search(name):
-        return True
-
-    # ISIN-Domizil
-    if any(isin.startswith(prefix) for prefix in _ETF_ISIN_PREFIXES):
         return True
 
     return False
@@ -66,20 +61,19 @@ def _is_etf(name: str, isin: str) -> bool:
 
 def classify_instrument(name: str, isin: str = "") -> str:
     """
-    Klassifiziert ein Instrument anhand Name und optionaler ISIN.
+    Klassifiziert ein Instrument anhand des Namens.
 
     Returns:
         "ETF" | "BOND" | "DERIVATIVE" | "OPTION_STRATEGY" | "STOCK"
     """
     name_lower = name.lower()
 
-    if _is_etf(name, isin):
+    if _is_etf(name):
         return "ETF"
 
     if any(kw in name_lower for kw in ("bond", "t-bil", "treasury", "gilts")):
         return "BOND"
 
-    # "yield" nur als BOND wenn kein ETF erkannt (High Yield ETFs existieren)
     if "yield" in name_lower and "etf" not in name_lower:
         return "BOND"
 
@@ -96,17 +90,15 @@ def classify_instrument(name: str, isin: str = "") -> str:
 
 def score_instrument(name: str, isin: str = "") -> int:
     """
-    Heuristischer Score basierend auf Name/ISIN.
-    Nur für Universe-Vorfilterung — kein Ersatz für Dividenden-Scoring.
+    Heuristischer Score für Universe-Vorfilterung.
+    Kein Ersatz für Dividenden-Scoring.
     """
     score = 0
     name_lower = name.lower()
 
-    # ETF-Bonus
-    if _is_etf(name, isin):
+    if _is_etf(name):
         score += 5
 
-    # Qualitätsindizes
     if "msci world" in name_lower:
         score += 4
     elif "msci" in name_lower:
@@ -118,7 +110,6 @@ def score_instrument(name: str, isin: str = "") -> int:
     if "world" in name_lower:
         score += 1
 
-    # Risikoabschläge
     if any(kw in name_lower for kw in ("lev", "3x", "2x", "turbo")):
         score -= 6
     if "short" in name_lower:
@@ -128,7 +119,6 @@ def score_instrument(name: str, isin: str = "") -> int:
     if "high yield" in name_lower:
         score -= 2
 
-    # Sehr kurze Namen → oft Sonderprodukte
     if len(name) < 5:
         score -= 1
 
