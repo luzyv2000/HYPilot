@@ -16,3 +16,9 @@ requests==2.33.1
 
 # GUI
 customtkinter==5.2.2
+
+# Testing
+pytest>=8.0
+pytest-xdist>=3.5
+hypothesis>=6.100
+pytest-benchmark>=4.0
