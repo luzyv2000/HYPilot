@@ -1,6 +1,6 @@
 # Dateiname:     hypilot.py
 # Version:       2026-04-22
-# Abhängigkeiten (intern): gui.tabs.app
+# Abhängigkeiten (intern): gui.app
 # Abhängigkeiten (extern): customtkinter
 """
 hypilot.py
@@ -38,7 +38,7 @@ def main() -> None:
     ctk.set_appearance_mode("system")
     ctk.set_default_color_theme("blue")
 
-    from gui.tabs.app import HYPilotApp
+    from gui.app import HYPilotApp
     app = HYPilotApp()
     app.mainloop()
 
