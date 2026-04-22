@@ -63,11 +63,23 @@ def classify_instrument(name: str, isin: str = "") -> str:
     """
     Klassifiziert ein Instrument anhand des Namens.
 
+    Reihenfolge ist entscheidend: spezifischere Kategorien
+    (DERIVATIVE, OPTION_STRATEGY) werden vor ETF geprüft,
+    da ETF-Muster wie (Dist) sonst zu Fehlklassifikationen führen.
+
     Returns:
         "ETF" | "BOND" | "DERIVATIVE" | "OPTION_STRATEGY" | "STOCK"
     """
     name_lower = name.lower()
 
+    # Spezifische Ausschlüsse zuerst — vor ETF-Erkennung
+    if any(kw in name_lower for kw in ("lev", "3x", "2x", "turbo", "knock")):
+        return "DERIVATIVE"
+
+    if "covered call" in name_lower:
+        return "OPTION_STRATEGY"
+
+    # ETF-Erkennung (nach Ausschlüssen)
     if _is_etf(name):
         return "ETF"
 
@@ -77,14 +89,7 @@ def classify_instrument(name: str, isin: str = "") -> str:
     if "yield" in name_lower and "etf" not in name_lower:
         return "BOND"
 
-    if any(kw in name_lower for kw in ("lev", "3x", "2x", "turbo", "knock")):
-        return "DERIVATIVE"
-
-    if "covered call" in name_lower:
-        return "OPTION_STRATEGY"
-
     return "STOCK"
-
 
 # ── Name-Score ────────────────────────────────────────────────────────────────
 
