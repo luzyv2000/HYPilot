@@ -138,13 +138,13 @@ def _score_stability(
 
     return points, notes
 
-
 def _score_payout(
     payout_ratio_bps: int | None,
 ) -> tuple[int, list[str]]:
     """
     Max 15 Punkte.
-    Ziel: Ausschüttungsquote nachhaltig (nicht zu hoch, nicht zu niedrig).
+    Normalisiert yfinance-Werte > 10000 bps (>100%) —
+    bei REITs strukturell möglich, wird neutral bewertet.
     """
     notes: list[str] = []
 
@@ -154,13 +154,27 @@ def _score_payout(
     ratio = bps_to_decimal(payout_ratio_bps)
     assert ratio is not None
 
+    # REITs: Payout >100% ist strukturell normal (FFO-Basis)
+    # Wir geben neutral 8 Punkte statt Risikoabzug
+    if ratio > Decimal("1.0"):
+        notes.append(
+            f"Ausschüttungsquote {float(ratio)*100:.0f}% "
+            f"— REIT/strukturell (neutral bewertet)"
+        )
+        return 8, notes
+
     if ratio > _PAYOUT_MAX:
         notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — Risiko (>90%)")
         return 0, notes
+
     if ratio <= _PAYOUT_IDEAL:
         notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — nachhaltig (≤70%)")
         return 15, notes
 
+    points = int(15 * float((_PAYOUT_MAX - ratio) / (_PAYOUT_MAX - _PAYOUT_IDEAL)))
+    notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — erhöht (70–90%)")
+    return points, notes
+    
     # 70–90%: linear interpolieren
     points = int(15 * float((_PAYOUT_MAX - ratio) / (_PAYOUT_MAX - _PAYOUT_IDEAL)))
     notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — erhöht (70–90%)")
