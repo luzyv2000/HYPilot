@@ -13,3 +13,6 @@ pandas==3.0.2
 
 # HTTP (Downloader, Ollama-API)
 requests==2.33.1
+
+# GUI
+customtkinter==5.2.2
