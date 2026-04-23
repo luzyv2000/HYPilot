@@ -1,5 +1,5 @@
 # Dateiname:     core/sources/yfinance_source.py
-# Version:       2026-04-22-fix2
+# Version:       2026-04-23-B2
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): yfinance
 """
@@ -7,12 +7,11 @@ core/sources/yfinance_source.py
 
 Implementiert DividendSource via yfinance.
 
-Bekannte Eigenheiten (yfinance):
-  - dividendYield: je nach Version Dezimalzahl (0.055) oder
-    Prozentwert (5.5) — wird normalisiert auf Dezimalzahl
-  - dividends: liefert je nach Version Series oder DataFrame,
-    Index enthält gelegentlich String-Einträge ('Dividends')
-  - Keine API-Stabilitätsgarantie
+Bekannte Eigenheiten:
+  - dividendYield: je nach Version Dezimalzahl oder Prozentwert
+  - dividends: Series oder DataFrame, gelegentlich String-Indizes
+  - AttributeError bei delisteten Tickern (_dividends fehlt)
+  - HTTP 404 bei ungültigen Tickern
 """
 
 from __future__ import annotations
@@ -42,13 +41,8 @@ _HISTORY_YEARS: int = 3
 def _normalize_yield(raw: float | None) -> float | None:
     """
     Normalisiert dividendYield auf Dezimalform (0.055 = 5.5%).
-
-    yfinance liefert je nach Version:
-      - Dezimalzahl: 0.055  → direkt verwenden
-      - Prozentwert: 5.5    → durch 100 dividieren
-
-    Grenzwert: Werte > 1.0 werden als Prozentwert behandelt.
-    Plausibilitätsgrenze: > 99.0 (= 9900%) wird als Datenfehler verworfen.
+    Werte > 1.0 werden als Prozentwert behandelt (÷ 100).
+    Werte > 99.0 werden als Datenfehler verworfen.
     """
     if raw is None:
         return None
@@ -66,15 +60,13 @@ def _normalize_yield(raw: float | None) -> float | None:
         return raw / 100
     return raw
 
+
 def _detect_frequency(payments: list[DividendPayment]) -> str | None:
     """Leitet Ausschüttungsfrequenz aus Zahlungsanzahl im letzten Jahr ab."""
     if not payments:
         return None
     now = date.today()
-    count = sum(
-        1 for p in payments
-        if (now - p.ex_date).days <= 365
-    )
+    count = sum(1 for p in payments if (now - p.ex_date).days <= 365)
     if count == 0:
         return None
     if count >= 10:
@@ -91,26 +83,18 @@ def _detect_frequency(payments: list[DividendPayment]) -> str | None:
 def _parse_dividends_series(raw) -> pd.Series:
     """
     Normalisiert die Rückgabe von ticker.dividends.
-
-    yfinance liefert je nach Version:
-      - pandas.Series mit DatetimeIndex
-      - pandas.DataFrame mit Spalte 'Dividends'
-
-    Gibt immer eine Series mit DatetimeIndex zurück.
+    Gibt immer eine Series zurück — leer bei unbekanntem Format.
     """
     if isinstance(raw, pd.DataFrame):
         if "Dividends" in raw.columns:
             return raw["Dividends"]
-        # erste numerische Spalte nehmen
         numeric_cols = raw.select_dtypes(include="number").columns
         if len(numeric_cols) > 0:
             return raw[numeric_cols[0]]
         logger.warning("dividends-DataFrame hat keine numerische Spalte.")
         return pd.Series(dtype=float)
-
     if isinstance(raw, pd.Series):
         return raw
-
     logger.warning("Unbekannter dividends-Typ: %s", type(raw))
     return pd.Series(dtype=float)
 
@@ -132,7 +116,7 @@ class YFinanceSource(DividendSource):
         logger.debug("Hole Snapshot für %s (%s)", isin, ticker)
         try:
             ticker_obj = yf.Ticker(ticker)
-            info = ticker_obj.info
+            info       = ticker_obj.info
 
             if not info or info.get("symbol") is None:
                 logger.warning(
@@ -140,14 +124,12 @@ class YFinanceSource(DividendSource):
                 )
                 return None
 
-            # ── Rohdaten ────────────────────────────────────────────────────
-            raw_yield   = info.get("dividendYield")
-            raw_payout  = info.get("payoutRatio")
-            raw_last    = info.get("lastDividendValue")
-            raw_date    = info.get("lastDividendDate")
-            currency    = info.get("currency", "USD")
+            raw_yield  = info.get("dividendYield")
+            raw_payout = info.get("payoutRatio")
+            raw_last   = info.get("lastDividendValue")
+            raw_date   = info.get("lastDividendDate")
+            currency   = info.get("currency", "USD")
 
-            # ── Normalisierung + Konvertierung ───────────────────────────────
             normalized_yield = _normalize_yield(raw_yield)
             yield_bps        = float_to_bps(normalized_yield)
             payout_bps       = float_to_bps(raw_payout)
@@ -156,15 +138,12 @@ class YFinanceSource(DividendSource):
             last_ex_date: date | None = None
             if raw_date:
                 try:
-                    last_ex_date = datetime.fromtimestamp(
-                        int(raw_date)
-                    ).date()
+                    last_ex_date = datetime.fromtimestamp(int(raw_date)).date()
                 except (OSError, ValueError, OverflowError, TypeError) as exc:
                     logger.warning(
                         "Ungültiger lastDividendDate für %s: %s", ticker, exc
                     )
 
-            # ── Frequenz aus Historie ────────────────────────────────────────
             history   = self.fetch_history(isin, ticker)
             frequency = _detect_frequency(history)
 
@@ -202,8 +181,19 @@ class YFinanceSource(DividendSource):
         logger.debug("Hole Historie für %s (%s)", isin, ticker)
         try:
             ticker_obj = yf.Ticker(ticker)
-            raw        = ticker_obj.dividends
-            dividends  = _parse_dividends_series(raw)
+
+            # ── AttributeError bei delisteten Tickern abfangen ───────────────
+            try:
+                raw = ticker_obj.dividends
+            except AttributeError as exc:
+                logger.debug(
+                    "dividends nicht verfügbar für %s (%s): %s — "
+                    "Ticker vermutlich delistet.",
+                    isin, ticker, exc,
+                )
+                return []
+
+            dividends = _parse_dividends_series(raw)
 
             if dividends.empty:
                 logger.debug("Keine Dividenden-Historie für %s", ticker)
@@ -217,35 +207,24 @@ class YFinanceSource(DividendSource):
             payments: list[DividendPayment] = []
 
             for timestamp, amount_raw in dividends.items():
-                # ── Timestamp normalisieren ──────────────────────────────────
-                ex_date: date | None = None
-
                 if isinstance(timestamp, str):
-                    # String-Einträge ('Dividends' o.ä.) überspringen
-                    logger.debug(
-                        "String-Index übersprungen: %r", timestamp
-                    )
+                    logger.debug("String-Index übersprungen: %r", timestamp)
                     continue
 
                 try:
                     ex_date = pd.Timestamp(timestamp).date()
                 except Exception:
                     logger.debug(
-                        "Timestamp nicht parsebar: %r — übersprungen",
-                        timestamp,
+                        "Timestamp nicht parsebar: %r — übersprungen", timestamp
                     )
                     continue
 
                 if ex_date < cutoff:
                     continue
 
-                # ── Betrag konvertieren ──────────────────────────────────────
                 try:
                     amount_micro = float_to_micro(float(amount_raw))
                 except (TypeError, ValueError):
-                    logger.debug(
-                        "Ungültiger Betrag %r — übersprungen", amount_raw
-                    )
                     continue
 
                 if amount_micro is None or amount_micro <= 0:
