@@ -1,5 +1,5 @@
 # Dateiname:     gui/widgets/instrument_table.py
-# Version:       2026-04-22
+# Version:       2026-04-22-A
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): customtkinter
 """
@@ -79,6 +79,7 @@ class InstrumentTable(ctk.CTkFrame):
         self._search_var.trace_add("write", self._on_search_change)
         self._search_after_id: str | None = None
         self._data_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._double_click_cb: Callable[[str], None] | None = None
 
         self._build()
         self.after(100, self._process_queue)
@@ -150,6 +151,8 @@ class InstrumentTable(ctk.CTkFrame):
                 text=cfg["heading"],
                 command=lambda c=col: self._sort_by(c),
             )
+
+        self._tree.bind("<Double-1>", self._on_double_click)
 
     def _apply_treeview_style(self) -> None:
         """
@@ -318,6 +321,26 @@ class InstrumentTable(ctk.CTkFrame):
             self._tree.heading(col, text=cfg["heading"] + suffix)
 
     # ── Öffentliche Hilfsmethode ──────────────────────────────────────────────
+
+    def set_double_click_callback(
+        self, callback: Callable[[str], None]
+    ) -> None:
+        """
+        Registriert einen Callback für Doppelklick auf eine Zeile.
+
+        Args:
+            callback: Wird mit der ISIN der angeklickten Zeile aufgerufen.
+        """
+        self._double_click_cb = callback
+
+    def _on_double_click(self, event: tk.Event) -> None:
+        """Verarbeitet Doppelklick — ermittelt ISIN und ruft Callback."""
+        region = self._tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        isin = self.get_selected_isin()
+        if isin and self._double_click_cb:
+            self._double_click_cb(isin)    
 
     def get_selected_isin(self) -> str | None:
         """Gibt die ISIN des aktuell selektierten Eintrags zurück."""

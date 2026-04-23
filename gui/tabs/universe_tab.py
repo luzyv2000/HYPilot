@@ -1,5 +1,5 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-04-22-C
+# Version:       2026-04-22-D
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          core.dividend_service,
 #                          db.dividend_repository
@@ -7,13 +7,8 @@
 """
 gui/tabs/universe_tab.py
 
-TR-Universum-Tab mit Batch-Dividenden-Update.
-
-Threading-Regeln (verbindlich):
-  - Batch-Update läuft in threading.Thread (Netzwerk-I/O)
-  - GUI-Updates NUR via self.after() + queue.Queue
-  - Niemals direkte Widget-Manipulation aus Hintergrund-Thread
-  - stop_flag als threading.Event für sauberen Abbruch
+TR-Universum-Tab mit Batch-Dividenden-Update und
+manueller Namensänderung via Doppelklick.
 """
 
 from __future__ import annotations
@@ -35,17 +30,16 @@ DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
 _QUERY = """
     SELECT
-        i.name,
+        COALESCE(i.name_override, i.name) AS display_name,
         i.isin,
         COALESCE(i.wkn, '') AS wkn,
-        d.yield_bps
+        d.yield_bps,
+        CASE WHEN i.name_override IS NOT NULL THEN 1 ELSE 0 END AS has_override
     FROM instruments i
     LEFT JOIN dividend_data d ON i.isin = d.isin
-    ORDER BY i.name ASC
+    ORDER BY display_name ASC
 """
 
-
-# ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
 def _format_div(yield_bps: int | None) -> str:
     if yield_bps is None:
@@ -63,9 +57,13 @@ def _load_instruments() -> list[Row]:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             for db_row in conn.execute(_QUERY):
+                # Kleines ✎-Präfix wenn name_override aktiv
+                name = db_row["display_name"]
+                if db_row["has_override"]:
+                    name = "✎ " + name
                 rows.append((
                     "",
-                    db_row["name"],
+                    name,
                     _format_isin_wkn(db_row["isin"], db_row["wkn"]),
                     _format_div(db_row["yield_bps"]),
                     db_row["isin"],
@@ -76,12 +74,9 @@ def _load_instruments() -> list[Row]:
     return rows
 
 
-# ── Tab ───────────────────────────────────────────────────────────────────────
-
 class UniverseTab(ctk.CTkFrame):
-    """TR-Universum-Tab mit Batch-Dividenden-Update."""
+    """TR-Universum-Tab."""
 
-    # Maximale ISINs pro Batch-Lauf (yfinance ist langsam)
     _BATCH_LIMIT = 100
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
@@ -90,8 +85,8 @@ class UniverseTab(ctk.CTkFrame):
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        self._batch_running   = False
-        self._stop_event      = threading.Event()
+        self._batch_running = False
+        self._stop_event    = threading.Event()
         self._progress_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
         self._build_toolbar()
@@ -99,6 +94,8 @@ class UniverseTab(ctk.CTkFrame):
         self._build_table()
 
         self._table.load_data(_load_instruments)
+        self._refresh_pending_badge()
+
         self.after(200, self._process_progress_queue)
 
     # ── Layout ────────────────────────────────────────────────────────────────
@@ -107,15 +104,11 @@ class UniverseTab(ctk.CTkFrame):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
 
-        # Aktualisieren
         ctk.CTkButton(
-            bar,
-            text="↻  Aktualisieren",
-            width=140,
+            bar, text="↻  Aktualisieren", width=140,
             command=self._refresh,
         ).pack(side="left", padx=(0, 8))
 
-        # Kategorie-Filter
         self._category_var = ctk.StringVar(value="Alle")
         ctk.CTkOptionMenu(
             bar,
@@ -125,22 +118,18 @@ class UniverseTab(ctk.CTkFrame):
             command=self._on_category_change,
         ).pack(side="left", padx=(0, 8))
 
-        # Nur mit Dividende
         self._div_only_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
-            bar,
-            text="Nur mit Dividende",
+            bar, text="Nur mit Dividende",
             variable=self._div_only_var,
             command=self._on_filter_change,
         ).pack(side="left", padx=(0, 8))
 
-        # Trennlinie
         ctk.CTkFrame(bar, width=2, height=24,
                      fg_color=("gray70", "gray40")).pack(
             side="left", padx=12
         )
 
-        # Batch-Update Button
         self._batch_btn = ctk.CTkButton(
             bar,
             text="⬇  Dividenden laden",
@@ -151,16 +140,24 @@ class UniverseTab(ctk.CTkFrame):
         )
         self._batch_btn.pack(side="left", padx=(0, 8))
 
-        # Limit-Anzeige
-        self._limit_label = ctk.CTkLabel(
-            bar,
-            text=f"max. {self._BATCH_LIMIT} ISINs",
-            text_color=("gray50", "gray60"),
+        ctk.CTkFrame(bar, width=2, height=24,
+                     fg_color=("gray70", "gray40")).pack(
+            side="left", padx=12
         )
-        self._limit_label.pack(side="left")
+
+        # Pending-Badge Button
+        self._pending_btn = ctk.CTkButton(
+            bar,
+            text="",
+            width=180,
+            fg_color=("orange3", "#b35c00"),
+            hover_color=("orange4", "#8a4500"),
+            command=self._open_pending_dialog,
+        )
+        self._pending_btn.pack(side="left", padx=(0, 8))
+        self._pending_btn.pack_forget()  # initial versteckt
 
     def _build_progress_bar(self) -> None:
-        """Fortschrittsbereich — initial versteckt."""
         self._progress_frame = ctk.CTkFrame(self, fg_color="transparent")
         self._progress_frame.grid(
             row=1, column=0, sticky="ew", padx=8, pady=(4, 0)
@@ -168,10 +165,7 @@ class UniverseTab(ctk.CTkFrame):
         self._progress_frame.grid_columnconfigure(1, weight=1)
 
         self._progress_label = ctk.CTkLabel(
-            self._progress_frame,
-            text="",
-            anchor="w",
-            width=200,
+            self._progress_frame, text="", anchor="w", width=200,
         )
         self._progress_label.grid(row=0, column=0, padx=(0, 8), sticky="w")
 
@@ -182,25 +176,60 @@ class UniverseTab(ctk.CTkFrame):
         self._progress_bar.grid(row=0, column=1, sticky="ew")
 
         self._progress_detail = ctk.CTkLabel(
-            self._progress_frame,
-            text="",
+            self._progress_frame, text="",
             text_color=("gray50", "gray60"),
-            anchor="e",
-            width=220,
+            anchor="e", width=220,
         )
         self._progress_detail.grid(row=0, column=2, padx=(8, 0), sticky="e")
 
-        # Initial verstecken
         self._progress_frame.grid_remove()
 
     def _build_table(self) -> None:
         self._table = InstrumentTable(self)
         self._table.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
+        self._table.set_double_click_callback(self._on_row_double_click)
+
+    # ── Namensänderung ────────────────────────────────────────────────────────
+
+    def _on_row_double_click(self, isin: str) -> None:
+        """Öffnet Name-Edit-Dialog für die angeklickte ISIN."""
+        from gui.widgets.name_edit_dialog import NameEditDialog
+        NameEditDialog(
+            self,
+            isin=isin,
+            on_saved=self._on_name_saved,
+        )
+
+    def _on_name_saved(self) -> None:
+        """Tabelle neu laden nach Namensänderung."""
+        self._table.load_data(_load_instruments)
+
+    def _open_pending_dialog(self) -> None:
+        from gui.widgets.pending_names_dialog import PendingNamesDialog
+        PendingNamesDialog(
+            self,
+            on_closed=self._on_pending_dialog_closed,
+        )
+
+    def _on_pending_dialog_closed(self) -> None:
+        self._refresh_pending_badge()
+        self._table.load_data(_load_instruments)
+
+    def _refresh_pending_badge(self) -> None:
+        """Aktualisiert Pending-Badge in der Toolbar."""
+        from db.instrument_repository import count_pending_name_changes
+        count = count_pending_name_changes()
+        if count > 0:
+            self._pending_btn.configure(
+                text=f"⚠  {count} Namensänderung(en)"
+            )
+            self._pending_btn.pack(side="left", padx=(0, 8))
+        else:
+            self._pending_btn.pack_forget()
 
     # ── Batch-Update ──────────────────────────────────────────────────────────
 
     def _toggle_batch(self) -> None:
-        """Start oder Abbruch des Batch-Updates."""
         if self._batch_running:
             self._stop_batch()
         else:
@@ -209,38 +238,27 @@ class UniverseTab(ctk.CTkFrame):
     def _start_batch(self) -> None:
         self._batch_running = True
         self._stop_event.clear()
-
         self._batch_btn.configure(
             text="⏹  Abbrechen",
             fg_color=("firebrick3", "#8b0000"),
             hover_color=("firebrick4", "#6b0000"),
         )
-        self._progress_frame.grid()      # einblenden
+        self._progress_frame.grid()
         self._progress_bar.set(0)
         self._progress_label.configure(text="Starte …")
         self._progress_detail.configure(text="")
-
-        threading.Thread(
-            target=self._batch_worker,
-            daemon=True,
-        ).start()
+        threading.Thread(target=self._batch_worker, daemon=True).start()
 
     def _stop_batch(self) -> None:
-        """Sendet Abbruch-Signal — Worker beendet sich beim nächsten ISIN."""
         self._stop_event.set()
         self._progress_label.configure(text="Wird abgebrochen …")
         self._batch_btn.configure(state="disabled")
 
     def _batch_worker(self) -> None:
-        """
-        Läuft im Hintergrund-Thread.
-        Kommuniziert mit GUI ausschließlich via _progress_queue.
-        """
         from core.dividend_service import update_batch
 
-        def on_progress(
-            processed: int, total: int, isin: str, status: str
-        ) -> None:
+        def on_progress(processed: int, total: int,
+                        isin: str, status: str) -> None:
             self._progress_queue.put((
                 "progress",
                 {"processed": processed, "total": total,
@@ -255,59 +273,32 @@ class UniverseTab(ctk.CTkFrame):
             )
             self._progress_queue.put(("done", stats))
         except Exception as exc:
-            logger.exception("Unerwarteter Fehler im Batch-Worker.")
+            logger.exception("Fehler im Batch-Worker.")
             self._progress_queue.put(("error", str(exc)))
 
     def _process_progress_queue(self) -> None:
-        """
-        Verarbeitet Nachrichten vom Batch-Worker.
-        Läuft ausschließlich im Hauptthread via self.after().
-        """
         try:
             while True:
                 kind, payload = self._progress_queue.get_nowait()
-
                 if kind == "progress":
-                    self._update_progress(
-                        payload["processed"],
-                        payload["total"],
-                        payload["isin"],
-                        payload["status"],
-                    )
-
+                    self._update_progress(**payload)
                 elif kind == "done":
                     self._on_batch_done(payload)
-
                 elif kind == "error":
                     self._on_batch_error(payload)
-
         except queue.Empty:
             pass
-
         self.after(150, self._process_progress_queue)
 
-    def _update_progress(
-        self,
-        processed: int,
-        total: int,
-        isin: str,
-        status: str,
-    ) -> None:
-        """Aktualisiert Fortschrittsanzeige. Nur im Hauptthread."""
+    def _update_progress(self, processed: int, total: int,
+                         isin: str, status: str) -> None:
         if total > 0:
             self._progress_bar.set(processed / total)
-
-        self._progress_label.configure(
-            text=f"{processed} / {total} ISINs"
-        )
-        # Kurze ISIN + Status für Detail-Label
-        short_isin = isin[:12] + "…" if len(isin) > 12 else isin
-        self._progress_detail.configure(
-            text=f"{short_isin}  {status}"
-        )
+        self._progress_label.configure(text=f"{processed} / {total} ISINs")
+        short = isin[:12] + "…" if len(isin) > 12 else isin
+        self._progress_detail.configure(text=f"{short}  {status}")
 
     def _on_batch_done(self, stats: dict[str, int]) -> None:
-        """Batch erfolgreich abgeschlossen."""
         self._batch_running = False
         self._progress_bar.set(1.0)
         self._progress_label.configure(
@@ -316,16 +307,9 @@ class UniverseTab(ctk.CTkFrame):
         )
         self._progress_detail.configure(text="")
         self._reset_batch_button()
-
-        # Tabelle sofort neu laden damit neue Dividendenwerte sichtbar sind
         self._table.load_data(_load_instruments)
 
-        logger.info(
-            "Batch-UI abgeschlossen: %s", stats
-        )
-
     def _on_batch_error(self, message: str) -> None:
-        """Batch mit Fehler beendet."""
         self._batch_running = False
         self._progress_label.configure(text=f"⚠ Fehler: {message}")
         self._reset_batch_button()
@@ -338,7 +322,7 @@ class UniverseTab(ctk.CTkFrame):
             state="normal",
         )
 
-    # ── Filter / Aktualisieren ────────────────────────────────────────────────
+    # ── Filter ────────────────────────────────────────────────────────────────
 
     def _refresh(self) -> None:
         self._table.load_data(_load_instruments)
@@ -349,7 +333,6 @@ class UniverseTab(ctk.CTkFrame):
     def _on_filter_change(self) -> None:
         category = self._category_var.get()
         div_only = self._div_only_var.get()
-
         from analysis.rules import classify_instrument
 
         def filtered_loader() -> list[Row]:
@@ -357,7 +340,9 @@ class UniverseTab(ctk.CTkFrame):
             result = []
             for row in base:
                 if category != "Alle":
-                    if classify_instrument(row[1], row[4]) != category:
+                    # ✎-Präfix für classify entfernen
+                    clean_name = row[1].lstrip("✎ ")
+                    if classify_instrument(clean_name, row[4]) != category:
                         continue
                 if div_only and row[3] == "—":
                     continue
