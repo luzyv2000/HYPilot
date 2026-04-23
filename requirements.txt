@@ -1,24 +1,28 @@
 # HYPilot — direkte Abhängigkeiten
 # Transitive Dependencies werden automatisch installiert.
-# Stand: 2026-04-22
+# Stand: 2026-04-23
 #
 # Installation: pip install -r requirements.txt
 
-# PDF-Parsing (TR Instrument Universe)
+# PDF-Parsing
 pdfplumber==0.11.9
 
 # Marktdaten / Dividenden
 yfinance==1.2.2
 pandas==3.0.2
 
-# HTTP (Downloader, Ollama-API)
+# HTTP
 requests==2.33.1
 
 # GUI
 customtkinter==5.2.2
+
+# Konfiguration
+python-dotenv>=1.0
 
 # Testing
 pytest>=8.0
 pytest-xdist>=3.5
 hypothesis>=6.100
 pytest-benchmark>=4.0
+responses>=0.25
