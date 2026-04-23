@@ -20,7 +20,9 @@
 
 ## **B. GUI / Usability**
 
+5. manuelles Dividenden-Update ruft immer dieselben ISIN ab
 
+6. manuelles Dividenden-Update trägt keine 0,0 ab und pausiert den Abruf für diese ISIN nicht
 
 ## **C. Datenpersistenz & Verwaltung**
 
