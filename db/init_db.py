@@ -1,5 +1,5 @@
 # Dateiname:     db/init_db.py
-# Version:       2026-04-20
+# Version:       2026-04-22-A
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
@@ -9,11 +9,13 @@ Erstellt oder aktualisiert das HYPilot-Datenbankschema.
 Idempotent: kann sicher mehrfach ausgeführt werden.
 
 Schema-Übersicht:
-  instruments     — Wertpapier-Stammdaten (aus TR-PDF)
-  metadata        — Schlüssel-Wert-Paare (z.B. letzter PDF-Hash)
-  ticker_mapping  — ISIN → Ticker-Zuordnung (yfinance, OpenFIGI, manuell)
-  dividend_data   — Aggregierte Dividenden-Kennzahlen je Instrument
-  dividend_history — Einzelne Dividendenzahlungen (Historie)
+  instruments        — Wertpapier-Stammdaten (aus TR-PDF)
+                       + name_override (manuelle Namensänderung)
+  metadata           — Schlüssel-Wert-Paare
+  ticker_mapping     — ISIN → Ticker-Zuordnung
+  dividend_data      — Aggregierte Dividenden-Kennzahlen
+  dividend_history   — Einzelne Dividendenzahlungen
+  pending_name_changes — PDF-erkannte Namensänderungen (warten auf Zustimmung)
 
 Finanz-Konventionen:
   - Renditen als INTEGER in Basispunkten (bps): 1% = 100 bps
@@ -36,15 +38,18 @@ DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
 _DDL_STATEMENTS: list[str] = [
 
-    # ── Bestehend (unverändert) ───────────────────────────────────────────────
+    # ── Stammdaten ────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS instruments (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        name       TEXT    NOT NULL,
-        isin       TEXT    NOT NULL UNIQUE,
-        wkn        TEXT,
-        symbol     TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT    NOT NULL,
+        isin          TEXT    NOT NULL UNIQUE,
+        wkn           TEXT,
+        symbol        TEXT,
+        name_override TEXT,
+        -- Manuell gesetzter Name; hat Vorrang vor name.
+        -- Anzeige via: COALESCE(name_override, name)
+        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
 
@@ -55,7 +60,7 @@ _DDL_STATEMENTS: list[str] = [
     )
     """,
 
-    # ── Neu: ISIN → Ticker-Mapping ────────────────────────────────────────────
+    # ── ISIN → Ticker-Mapping ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS ticker_mapping (
         isin       TEXT PRIMARY KEY
@@ -63,7 +68,6 @@ _DDL_STATEMENTS: list[str] = [
         ticker     TEXT NOT NULL,
         exchange   TEXT,
         source     TEXT NOT NULL DEFAULT 'unknown',
-        -- Mögliche Werte: 'yfinance', 'openfigi', 'manual'
         verified   INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_source CHECK (
@@ -72,25 +76,17 @@ _DDL_STATEMENTS: list[str] = [
     )
     """,
 
-    # ── Neu: Aggregierte Dividenden-Kennzahlen ────────────────────────────────
-    # yield_bps: Trailing-12-Monate-Rendite in Basispunkten (INTEGER)
-    #            Beispiel: 10,5% → 1050 bps
-    # last_amount_micro: letzte Dividendenzahlung in Micro-Units
-    #            Beispiel: 0.25 EUR → 250_000 micro-EUR
+    # ── Dividenden-Kennzahlen ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS dividend_data (
         isin              TEXT PRIMARY KEY
                               REFERENCES instruments(isin) ON DELETE CASCADE,
         yield_bps         INTEGER,
-        -- Trailing-12M-Rendite in Basispunkten; NULL = unbekannt
         frequency         TEXT,
-        -- 'monthly'|'quarterly'|'semi_annual'|'annual'|'irregular'|NULL
         last_amount_micro INTEGER,
-        -- letzte Ausschüttung in Micro-Units der Währung
         last_ex_date      DATE,
         currency          TEXT,
         payout_ratio_bps  INTEGER,
-        -- Ausschüttungsquote in Basispunkten; NULL = unbekannt
         data_source       TEXT NOT NULL DEFAULT 'yfinance',
         updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_frequency CHECK (
@@ -101,7 +97,7 @@ _DDL_STATEMENTS: list[str] = [
     )
     """,
 
-    # ── Neu: Dividenden-Einzelzahlungen (Historie) ───────────────────────────
+    # ── Dividenden-Historie ───────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS dividend_history (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,10 +105,28 @@ _DDL_STATEMENTS: list[str] = [
                           REFERENCES instruments(isin) ON DELETE CASCADE,
         ex_date       DATE    NOT NULL,
         amount_micro  INTEGER NOT NULL,
-        -- Betrag in Micro-Units der Währung
         currency      TEXT    NOT NULL,
         data_source   TEXT    NOT NULL DEFAULT 'yfinance',
         UNIQUE (isin, ex_date)
+    )
+    """,
+
+    # ── Ausstehende Namensänderungen (PDF-Konflikte) ──────────────────────────
+    # Wenn das PDF einen anderen Namen für eine bekannte ISIN liefert,
+    # wird der Konflikt hier gespeichert statt automatisch übernommen.
+    # Der Nutzer entscheidet via GUI ob der neue Name übernommen wird.
+    """
+    CREATE TABLE IF NOT EXISTS pending_name_changes (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        isin          TEXT    NOT NULL
+                          REFERENCES instruments(isin) ON DELETE CASCADE,
+        name_current  TEXT    NOT NULL,
+        -- aktuell angezeigter Name (name_override falls gesetzt, sonst name)
+        name_pdf      TEXT    NOT NULL,
+        -- neuer Name aus PDF
+        detected_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (isin)
+        -- nur ein offener Konflikt pro ISIN
     )
     """,
 
@@ -122,6 +136,14 @@ _DDL_STATEMENTS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_div_history_isin ON dividend_history(isin)",
     "CREATE INDEX IF NOT EXISTS idx_div_history_date ON dividend_history(ex_date)",
     "CREATE INDEX IF NOT EXISTS idx_ticker_mapping_ticker ON ticker_mapping(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_pending_isin ON pending_name_changes(isin)",
+]
+
+# ── Migrationen (für bestehende DBs) ─────────────────────────────────────────
+# ALTER TABLE ist nicht idempotent → try/except pro Statement
+
+_MIGRATIONS: list[str] = [
+    "ALTER TABLE instruments ADD COLUMN name_override TEXT",
 ]
 
 
@@ -131,6 +153,7 @@ def init_database(db_path: Path = DB_PATH) -> None:
     """
     Erstellt oder aktualisiert alle Tabellen und Indizes.
     Bestehende Daten bleiben erhalten (IF NOT EXISTS).
+    Migrationen werden idempotent ausgeführt (Fehler = Spalte existiert bereits).
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Initialisiere Datenbank: %s", db_path)
@@ -141,6 +164,13 @@ def init_database(db_path: Path = DB_PATH) -> None:
 
         for ddl in _DDL_STATEMENTS:
             conn.execute(ddl)
+
+        for migration in _MIGRATIONS:
+            try:
+                conn.execute(migration)
+                logger.info("Migration ausgeführt: %s", migration[:60])
+            except sqlite3.OperationalError:
+                pass  # Spalte existiert bereits — korrekt
 
         conn.commit()
 
