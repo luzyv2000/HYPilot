@@ -3,7 +3,7 @@
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
-db/init_db.py
+db/init_db.py 
 
 Erstellt oder aktualisiert das HYPilot-Datenbankschema.
 Idempotent: kann sicher mehrfach ausgeführt werden.
