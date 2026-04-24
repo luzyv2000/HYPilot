@@ -19199,6 +19199,4 @@ bash
 -   🔜 Nächster Schritt: *dateutil* testen, dann offene Punkte P6/P7
     (PyMuPDF, Selenium) klären
 
-</div>
 
-</div>
