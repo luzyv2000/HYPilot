@@ -1,0 +1,7 @@
+Vorlagen:
+
+Ich nenne dir die Beschreibung und den Link zu einem Repository und du untersucht dieses nach dem Muster: Analysiere, erläutere und erstelle einen Fahrplan, um den Inhalt dieses Links zu unserem Nutzen zu sichern. 
+
+Link: https://github.com/Alishahryar1/free-claude-code
+
+Bitte prüfe den Link, starte eine kritische Analyse und teile mir die eigene, ungefilterte Meinung mit. Lass dir soviel Zeit, wie du benötigst, und verteile deine Antwort, wenn du sie aufgrund von Limits nicht auf einmal liefern kannst, auf soviele durchnummerierte Mitteilungen wie nötig. Analysiere erst generell (was könnte irgendwann einmal nützlich sein) und dann speziell, einmal mit Schwerpunkt Einsatz eines Multi-Agenten-Systems mit OpenClaw und einmal mit dem Schwerpunkt Einsatz des Wertpapier-Analyse-Tools HYPilot.
