@@ -1,0 +1,13 @@
+[Unit]
+Description=HYPilot Automatischer Dividenden-Abruf
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=luzy
+WorkingDirectory=/home/luzy/workspace/openclaw-min
+ExecStart=/home/luzy/workspace/openclaw-min/venv/bin/python \
+          -m ingestion.auto_dividend_update
+StandardOutput=journal
+StandardError=journal
