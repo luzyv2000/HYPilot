@@ -1,11 +1,12 @@
 # HYPilot — direkte Abhängigkeiten
-# Transitive Dependencies werden automatisch installiert.
-# Stand: 2026-04-23
+# Stand: 2026-04-24
 #
 # Installation: pip install -r requirements.txt
 
 # PDF-Parsing
 pdfplumber==0.11.9
+# PyMuPDF: geplant für GUI-Vorschau (noch nicht integriert)
+# PyMuPDF>=1.23
 
 # Marktdaten / Dividenden
 yfinance==1.2.2
@@ -20,11 +21,12 @@ customtkinter==5.2.2
 # Konfiguration
 python-dotenv>=1.0
 
+# Datumsberechnung (18-Monats-Regel)
+python-dateutil>=2.9
+
 # Testing
 pytest>=8.0
 pytest-xdist>=3.5
 hypothesis>=6.100
 pytest-benchmark>=4.0
 responses>=0.25
-python-dateutil>=2.9
-python-dateutil>=2.9
