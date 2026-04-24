@@ -26,3 +26,4 @@ pytest-xdist>=3.5
 hypothesis>=6.100
 pytest-benchmark>=4.0
 responses>=0.25
+python-dateutil>=2.9
