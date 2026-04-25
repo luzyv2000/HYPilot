@@ -3,7 +3,6 @@
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): python-dateutil
 """
-"""
 db/dividend_repository.py
 
 Datenbankoperationen für dividend_data, dividend_history
