@@ -156,22 +156,12 @@ def _apply_suffix(ticker: str, exchange: str | None) -> str:
 
 
 def _validate_ticker(ticker: str, exchange: str | None = None) -> str | None:
-    """
-    Prüft ob ein Ticker von yfinance erkannt wird.
-
-    Versucht in dieser Reihenfolge:
-      1. Ticker + Exchange-Suffix (sofern bekannt und noch nicht enthalten)
-      2. Ticker pur (Fallback)
-
-    Returns:
-        Valides Ticker-Symbol (ggf. mit Suffix) oder None.
-    """
     candidates: list[str] = []
 
     suffixed = _apply_suffix(ticker, exchange)
     if suffixed != ticker:
-        candidates.append(suffixed)   # Erst mit Suffix versuchen
-    candidates.append(ticker)         # Dann ohne Suffix
+        candidates.append(suffixed)
+    candidates.append(ticker)
 
     for candidate in candidates:
         try:
