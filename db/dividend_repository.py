@@ -3,6 +3,7 @@
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): python-dateutil
 """
+"""
 db/dividend_repository.py
 
 Datenbankoperationen für dividend_data, dividend_history
@@ -264,4 +265,68 @@ def get_isins_due_for_update(
             ORDER BY d.updated_at ASC NULLS FIRST
             LIMIT ?
             """,
-            (cut
+            (cutoff, today, limit),
+        ).fetchall()
+    return [row["isin"] for row in rows]
+
+
+def get_isins_without_dividend_data(
+    db_path: Path = DB_PATH,
+    limit: int = 100,
+) -> list[str]:
+    """Gibt ISINs ohne jegliche Dividendendaten zurück (für manuellen Batch)."""
+    with _get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT i.isin FROM instruments i
+            LEFT JOIN dividend_data d ON i.isin = d.isin
+            WHERE d.isin IS NULL
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [row["isin"] for row in rows]
+
+
+def get_unshown_threshold_crossings(
+    db_path: Path = DB_PATH,
+) -> list[dict]:
+    """Gibt noch nicht angezeigte Schwellwert-Überschreitungen zurück."""
+    with _get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT tc.id, tc.isin, tc.yield_bps_old, tc.yield_bps_new,
+                   tc.direction, tc.detected_at,
+                   COALESCE(i.name_override, i.name) AS display_name
+            FROM threshold_crossings tc
+            JOIN instruments i ON i.isin = tc.isin
+            WHERE tc.shown_at IS NULL
+            ORDER BY tc.direction DESC, tc.yield_bps_new DESC
+            """,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def has_recent_dividends(
+    isin: str,
+    months: int = _NO_DIV_MONTHS,
+    db_path: Path = DB_PATH,
+) -> bool:
+    """
+    Prüft ob in den letzten `months` Monaten eine Dividende geflossen ist.
+    Basis: dividend_history.
+
+    Verwendet dateutil.relativedelta für präzise Monatsberechnung
+    (verhindert Fehler bei Monaten unterschiedlicher Länge).
+    """
+    cutoff = (date.today() - relativedelta(months=months)).isoformat()
+
+    with _get_connection(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt FROM dividend_history
+            WHERE isin = ? AND ex_date >= ?
+            """,
+            (isin, cutoff),
+        ).fetchone()
+    return (row["cnt"] if row else 0) > 0
