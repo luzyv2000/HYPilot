@@ -67,8 +67,7 @@ logger = logging.getLogger(__name__)
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 
 _OPENFIGI_URL    = "https://api.openfigi.com/v3/mapping"
-# _OPENFIGI_APIKEY = os.getenv("OPENFIGI_API_KEY", "").strip()
-_OPENFIGI_APIKEY = os.getenv("MCbnH7MXtBE_ok3lFvYopOJNevXeTpiie", "").strip()
+_OPENFIGI_APIKEY = os.getenv("OPENFIGI_API_KEY", "").strip()
 
 # OpenFIGI erlaubt max. 100 ISINs pro Batch-Request
 _BATCH_SIZE = 100
