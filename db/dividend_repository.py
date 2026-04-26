@@ -245,7 +245,17 @@ def get_isins_due_for_update(
       - Noch nie aktualisiert ODER updated_at älter als interval_hours
       - UND skip_until ist NULL oder bereits vergangen
 
-    Alle ~13.000 Instrumente werden so über mehrere Läufe abgedeckt.
+    Reihenfolge: ISIN-Länderpräfix-Priorität zuerst.
+    US/CA-ISINs haben beste yfinance-Abdeckung → zuerst verarbeiten.
+    Verhindert dass der erste Batch ausschließlich aus AU/AT-Kleinsttiteln
+    besteht.
+
+    Prioritätsstufen (CASE WHEN):
+      1  → US, CA        (beste Abdeckung)
+      2  → DE, GB, FR,
+           CH, NL, SE,
+           DK, FI, NO   (gute europäische Abdeckung)
+      3  → alle anderen  (unsichere Abdeckung)
     """
     cutoff = (
         datetime.now() - timedelta(hours=interval_hours)
@@ -261,13 +271,27 @@ def get_isins_due_for_update(
             WHERE
                 (d.isin IS NULL OR d.updated_at < ?)
                 AND (d.skip_until IS NULL OR d.skip_until <= ?)
-            ORDER BY d.updated_at ASC NULLS FIRST
+            ORDER BY
+                CASE SUBSTR(i.isin, 1, 2)
+                    WHEN 'US' THEN 1
+                    WHEN 'CA' THEN 1
+                    WHEN 'DE' THEN 2
+                    WHEN 'GB' THEN 2
+                    WHEN 'FR' THEN 2
+                    WHEN 'CH' THEN 2
+                    WHEN 'NL' THEN 2
+                    WHEN 'SE' THEN 2
+                    WHEN 'DK' THEN 2
+                    WHEN 'FI' THEN 2
+                    WHEN 'NO' THEN 2
+                    ELSE 3
+                END ASC,
+                d.updated_at ASC NULLS FIRST
             LIMIT ?
             """,
             (cutoff, today, limit),
         ).fetchall()
     return [row["isin"] for row in rows]
-
 
 def get_isins_without_dividend_data(
     db_path: Path = DB_PATH,
