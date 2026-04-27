@@ -1,5 +1,5 @@
 # Dateiname:     db/init_db.py
-# Version:       2026-04-24
+# Version:       2026-04-27-fixed
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
@@ -30,18 +30,21 @@ Finanz-Konventionen:
   - Beträge als INTEGER in Micro-Units:         1 EUR = 1_000_000
   - Alle Berechnungen im Python-Code via decimal.Decimal — kein float
 """
-# Dateiname:     db/init_db.py
-"""
-db/init_db.py
 
-Erstellt die SQLite-Datenbank-Schema mit allen Tabellen.
-"""
+import logging
+import sqlite3
+from pathlib import Path
 
-# ... (imports und bestehender Code) ...
+logger = logging.getLogger(__name__)
 
-# ── Phase 1: Basis-Schema ────────────────────────────────────────────────────────
+# ── Pfad-Konstante ──────────────────────────────────────────────────────────
 
-TABLES_SQL = [
+DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
+
+
+# ── Phase 1: Basis-Schema ───────────────────────────────────────────────────────
+
+_TABLE_DDL: list[str] = [
     # ── Instrumente (Grunddaten) ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS instruments (
@@ -147,17 +150,23 @@ TABLES_SQL = [
 # ── Phase 2: Migrationen (für bestehende DBs) ─────────────────────────────────
 # ALTER TABLE ist NICHT idempotent → try/except pro Statement.
 
-MIGRATIONS_SQL = [
+_MIGRATIONS: list[str] = [
     # Migration: 'unresolvable' zu erlaubten Quellen hinzufügen
+    # Nur für alte Datenbanken — Neu-DBs haben das bereits in Phase 1
     """
     ALTER TABLE ticker_mapping
-    ADD CONSTRAINT chk_source_updated CHECK (
+    DROP CONSTRAINT chk_source
+    """,
+    
+    """
+    ALTER TABLE ticker_mapping
+    ADD CONSTRAINT chk_source CHECK (
         source IN ('yfinance', 'openfigi', 'manual', 'unknown', 'unresolvable')
     )
     """,
 ]
 
-# ── Phase 3: Indizes ──────────────────────────────────────────────────────────
+# ── Phase 3: Indizes ────────────────────────────────────────────────────────
 # Erst nach Migrationen ausführen — neue Spalten müssen existieren.
 
 _INDEX_DDL: list[str] = [
@@ -172,7 +181,7 @@ _INDEX_DDL: list[str] = [
 ]
 
 
-# ── Öffentliche API ───────────────────────────────────────────────────────────
+# ── Öffentliche API ────────────────────────────────────────────────────────────
 
 def init_database(db_path: Path = DB_PATH) -> None:
     """
@@ -184,6 +193,9 @@ def init_database(db_path: Path = DB_PATH) -> None:
       3. Indizes   — CREATE INDEX IF NOT EXISTS (nach Migrationen!)
 
     Bestehende Daten bleiben erhalten.
+    
+    Args:
+        db_path: Pfad zur Datenbankdatei (default: /home/luzy/workspace/openclaw-min/db/hypilot.db)
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Initialisiere Datenbank: %s", db_path)
@@ -202,9 +214,11 @@ def init_database(db_path: Path = DB_PATH) -> None:
         for migration in _MIGRATIONS:
             try:
                 conn.execute(migration)
-                logger.info("Migration ausgeführt: %s", migration[:70])
-            except sqlite3.OperationalError:
-                # Spalte existiert bereits — erwartetes Verhalten, kein Fehler
+                logger.debug("Migration ausgeführt: %s", migration[:70])
+            except sqlite3.OperationalError as e:
+                # Spalte existiert bereits oder Constraint existiert bereits
+                # — erwartetes Verhalten bei idempotenten Migrationen, kein Fehler
+                logger.debug("Migration skipped (bereits vorhanden): %s", str(e)[:70])
                 pass
 
         # Phase 3 — Indizes (nach Migrationen!)
@@ -217,7 +231,7 @@ def init_database(db_path: Path = DB_PATH) -> None:
     logger.info("Schema erfolgreich erstellt/aktualisiert.")
 
 
-# ── CLI-Einstiegspunkt ────────────────────────────────────────────────────────
+# ── CLI-Einstiegspunkt ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys
