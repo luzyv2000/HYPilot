@@ -180,16 +180,22 @@ def _apply_suffix(ticker: str, exchange: str | None):
     return ticker
 
 
-def _validate_ticker(ticker: str, exchange: str | None = None):
-    for candidate in [_apply_suffix(ticker, exchange), ticker]:
+def _validate_ticker(ticker: str, exchange: str | None = None) -> str | None:
+    suffixed = _apply_suffix(ticker, exchange)
+    # Duplikat vermeiden wenn kein Suffix angewendet wurde
+    candidates: list[str] = [suffixed]
+    if suffixed != ticker:
+        candidates.append(ticker)
+
+    for candidate in candidates:
         try:
             info = yf.Ticker(candidate).info
             if info.get("symbol") or info.get("quoteType"):
+                logger.debug("Ticker validiert: %s", candidate)
                 return candidate
         except Exception:
             continue
     return None
-
 
 # ── OpenFIGI intern (NEU) ───────────────────────────────────────────
 
@@ -240,47 +246,63 @@ def _resolve_via_openfigi(isin: str, db_path: Path = DB_PATH):
 
 # ── yfinance ───────────────────────────────────────────────────────
 
-def _resolve_via_yfinance(isin: str, db_path: Path = DB_PATH):
+def _resolve_via_yfinance(
+    isin: str,
+    db_path: Path = DB_PATH,
+) -> str | None:
+    """Letzter Fallback. Gibt String oder None zurück (kein Tupel)."""
+    if isin[:2].upper() in _ISIN_PREFIXES_SKIP_YF_DIRECT:
+        logger.debug("yfinance-Direktauflösung für %s übersprungen.", isin[:2])
+        return None
+
     try:
-        info = yf.Ticker(isin).info
-        symbol = info.get("symbol")
+        info     = yf.Ticker(isin).info
+        symbol   = info.get("symbol")
+        exchange = info.get("exchange")
 
         if not symbol:
-            return None, ResolveStatus.NO_DATA
+            logger.debug("yfinance: kein Symbol für %s", isin)
+            return None
 
-        _store_mapping(isin, symbol, "yfinance", info.get("exchange"), db_path)
-        return symbol, ResolveStatus.SUCCESS
+        logger.info("yfinance (Fallback): %s → %s (Börse: %s)", isin, symbol, exchange)
+        _store_mapping(isin, symbol, "yfinance", exchange, db_path)
+        return symbol
 
-    except Exception:
-        return None, ResolveStatus.ERROR
-
+    except Exception as exc:
+        logger.warning("yfinance fehlgeschlagen für %s: %s", isin, exc)
+        return None
 
 # ── Public API ─────────────────────────────────────────────────────
 
-def resolve(isin: str, db_path: Path = DB_PATH, skip_openfigi: bool = False):
+def resolve(
+    isin: str,
+    db_path: Path = DB_PATH,
+    skip_openfigi: bool = False,
+) -> str | None:
     ticker, source = _lookup_db(isin, db_path)
-
     if source == "unresolvable":
         return None
     if ticker:
+        logger.debug("Ticker aus DB-Cache: %s → %s", isin, ticker)
         return ticker
 
-    openfigi_status = None
-
+    openfigi_found = False
     if not skip_openfigi:
-        ticker, openfigi_status = _resolve_via_openfigi_internal(isin, db_path)
+        ticker, status = _resolve_via_openfigi_internal(isin, db_path)
         if ticker:
             return ticker
+        openfigi_found = (status == ResolveStatus.NO_DATA)
 
-    ticker, yf_status = _resolve_via_yfinance(isin, db_path)
+    ticker = _resolve_via_yfinance(isin, db_path)
     if ticker:
         return ticker
 
-    if openfigi_status == ResolveStatus.NO_DATA and yf_status == ResolveStatus.NO_DATA:
+    # Nur als unresolvable markieren wenn beide Quellen NO_DATA meldeten
+    # (nicht bei RATE_LIMIT oder ERROR — dann später erneut versuchen)
+    if openfigi_found or skip_openfigi:
         _store_unresolvable(isin, db_path)
 
     return None
-
 
 def store_manual_mapping(isin: str, ticker: str,
                          exchange: str | None = None,
