@@ -16,3 +16,18 @@ source venv/bin/activate
 git add -A
 git commit -m "fix: KOMMENTAR"
 git push
+
+==============================================
+
+# Zuerst unresolvable-Einträge aus den Testläufen bereinigen, damit der Import sauber startet:
+
+bashcd /home/luzy/workspace/openclaw-min
+source venv/bin/activate
+
+sqlite3 /home/luzy/workspace/openclaw-min/db/hypilot.db \
+  "DELETE FROM ticker_mapping WHERE source = 'unresolvable';"
+
+# Dann Testlauf mit 200 ISINs (dauert ~3 Minuten ohne API-Key):
+bashpython -m ingestion.bulk_ticker_import --missing-only --limit 200
+
+
