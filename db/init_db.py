@@ -1,5 +1,5 @@
 # Dateiname:     db/init_db.py
-# Version:       2026-04-27-fixed
+# Version:       2026-04-27-improved
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
@@ -29,6 +29,15 @@ Finanz-Konventionen:
   - Renditen als INTEGER in Basispunkten (bps): 1 % = 100 bps
   - Beträge als INTEGER in Micro-Units:         1 EUR = 1_000_000
   - Alle Berechnungen im Python-Code via decimal.Decimal — kein float
+
+Ticker-Source-Typen (CHECK constraint):
+  - 'yfinance'              — via yfinance-Direktabfrage validiert
+  - 'openfigi'              — via OpenFIGI, von yfinance validiert
+  - 'openfigi_unvalidated'  — via OpenFIGI, NICHT von yfinance validiert
+                              (typisch für europäische/exotische Börsen)
+  - 'manual'                — manuell vom Nutzer eingetragen
+  - 'unknown'               — Legacy/unbekannte Quelle
+  - 'unresolvable'          — nicht auflösbar (TTL: 30 Tage, dann Retry)
 """
 
 import logging
@@ -69,7 +78,8 @@ _TABLE_DDL: list[str] = [
         verified   INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_source CHECK (
-            source IN ('yfinance', 'openfigi', 'manual', 'unknown', 'unresolvable')
+            source IN ('yfinance', 'openfigi', 'openfigi_unvalidated', 
+                       'manual', 'unknown', 'unresolvable')
         )
     )
     """,
@@ -151,7 +161,7 @@ _TABLE_DDL: list[str] = [
 # ALTER TABLE ist NICHT idempotent → try/except pro Statement.
 
 _MIGRATIONS: list[str] = [
-    # Migration: 'unresolvable' zu erlaubten Quellen hinzufügen
+    # Migration: 'unresolvable' + 'openfigi_unvalidated' zu erlaubten Quellen
     # Nur für alte Datenbanken — Neu-DBs haben das bereits in Phase 1
     """
     ALTER TABLE ticker_mapping
@@ -161,7 +171,8 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE ticker_mapping
     ADD CONSTRAINT chk_source CHECK (
-        source IN ('yfinance', 'openfigi', 'manual', 'unknown', 'unresolvable')
+        source IN ('yfinance', 'openfigi', 'openfigi_unvalidated', 
+                   'manual', 'unknown', 'unresolvable')
     )
     """,
 ]

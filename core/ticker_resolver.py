@@ -1,17 +1,24 @@
 # Dateiname:     core/ticker_resolver.py
-# Version:       2026-04-27-fixed
+# Version:       2026-04-27-improved
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): requests, python-dotenv, yfinance
 """
 core/ticker_resolver.py
 
-Löst ISIN → Ticker-Symbol auf.
+Löst ISIN → Ticker-Symbol auf mit intelligenter Validierung.
 
 Auflösungsstrategie (drei Stufen):
   1. Lokale DB (ticker_mapping)  — sofort, offline
      Sonderfall: source='unresolvable' → sofort None (kein API-Call)
   2. OpenFIGI + Exchange-Suffix  — ISIN-land-basierte Börsenpräferenz
+     mit optionaler yfinance-Validierung (regional konfigurierbar)
   3. yfinance-Direktabfrage      — Fallback; für bestimmte Präfixe deaktiviert
+
+Validierungslogik (neu):
+  - Mainstream (US/CA/DE/GB): yfinance-Validierung ERFORDERLICH
+  - Exotisch (AT/FR/IT/etc.):  OpenFIGI-Ergebnis reicht, speichern als
+    'openfigi_unvalidated' wenn yfinance-Validierung fehlschlägt
+  - 500er Fehler: Exponential Backoff (1s, 2s, 4s) statt sofort Fehler
 
 Unresolvable-Tracking:
   Nicht auflösbare ISINs erhalten source='unresolvable' für UNRESOLVABLE_TTL_DAYS.
@@ -83,8 +90,13 @@ _ISIN_PREFIXES_SKIP_YF_DIRECT: frozenset[str] = frozenset({
     "AT", "AU", "HK", "JP", "SG", "NZ",
 })
 
+# ISINs für die yfinance-Validierung ERFORDERLICH ist
+_ISIN_PREFIXES_REQUIRE_YF_VALIDATION: frozenset[str] = frozenset({
+    "US", "CA", "DE", "GB",
+})
 
-# ── DB ──────────────────────────────────────────────────────────────
+
+# ── DB ─────────────────────────────────────────────────────────────
 
 def _get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -180,26 +192,62 @@ def _apply_suffix(ticker: str, exchange: str | None):
     return ticker
 
 
-def _validate_ticker(ticker: str, exchange: str | None = None) -> str | None:
+def _validate_ticker_with_retry(ticker: str, exchange: str | None = None,
+                                max_retries: int = 2) -> str | None:
+    """
+    Validiert Ticker mit Exponential Backoff bei yfinance 500er Fehlern.
+    
+    Args:
+        ticker: Ticker-Symbol
+        exchange: OpenFIGI-Börsencode (z.B. 'GY', 'LN')
+        max_retries: Max. Anzahl Retries bei 500er Fehlern
+    
+    Returns:
+        Validiertes Ticker-Symbol oder None
+    """
     suffixed = _apply_suffix(ticker, exchange)
-    # Duplikat vermeiden wenn kein Suffix angewendet wurde
     candidates: list[str] = [suffixed]
     if suffixed != ticker:
         candidates.append(ticker)
 
     for candidate in candidates:
-        try:
-            info = yf.Ticker(candidate).info
-            if info.get("symbol") or info.get("quoteType"):
-                logger.debug("Ticker validiert: %s", candidate)
-                return candidate
-        except Exception:
-            continue
+        for attempt in range(max_retries):
+            try:
+                info = yf.Ticker(candidate).info
+                if info.get("symbol") or info.get("quoteType"):
+                    logger.debug("Ticker validiert (%s): %s", candidate, info.get("symbol", ""))
+                    return candidate
+            except Exception as e:
+                # Bei 500er Fehler: Retry mit Exponential Backoff
+                if "500" in str(e) and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s...
+                    logger.debug("yfinance 500er — Retry in %ds: %s", wait_time, str(e)[:80])
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    # Finaler Fehler oder letzter Retry fehlgeschlagen
+                    logger.debug("yfinance-Validierung fehlgeschlagen für %s: %s", 
+                               candidate, str(e)[:80])
+                    break
+    
     return None
 
-# ── OpenFIGI intern (NEU) ───────────────────────────────────────────
+
+def _validate_ticker(ticker: str, exchange: str | None = None) -> str | None:
+    """Wrapper für Rückwärtskompatibilität."""
+    return _validate_ticker_with_retry(ticker, exchange)
+
+
+# ── OpenFIGI intern ───────────────────────────────────────────────────────
 
 def _resolve_via_openfigi_internal(isin: str, db_path: Path = DB_PATH):
+    """
+    OpenFIGI-Auflösung mit intelligenter regionaler Validierung.
+    
+    Strategie:
+      - US/CA/DE/GB: yfinance-Validierung ERFORDERLICH → 'openfigi'
+      - Andere:      OpenFIGI-Ergebnis reicht → 'openfigi_unvalidated' bei yfinance-Fehler
+    """
     headers = {"Content-Type": "application/json"}
     if _OPENFIGI_APIKEY:
         headers["X-OPENFIGI-APIKEY"] = _OPENFIGI_APIKEY
@@ -226,14 +274,34 @@ def _resolve_via_openfigi_internal(isin: str, db_path: Path = DB_PATH):
         if not best:
             return None, ResolveStatus.NO_DATA
 
-        ticker = _validate_ticker(best["ticker"], best.get("exchCode"))
-        if not ticker:
+        raw_ticker = best["ticker"]
+        exchange = best.get("exchCode")
+        isin_prefix = isin[:2].upper()
+
+        # Validierung versuchen
+        validated_ticker = _validate_ticker(raw_ticker, exchange)
+        
+        if validated_ticker:
+            # Validierung erfolgreich → speichern als 'openfigi'
+            _store_mapping(isin, validated_ticker, "openfigi", exchange, db_path)
+            logger.debug("OpenFIGI (validiert): %s → %s", isin, validated_ticker)
+            return validated_ticker, ResolveStatus.SUCCESS
+        
+        # Validierung fehlgeschlagen
+        if isin_prefix in _ISIN_PREFIXES_REQUIRE_YF_VALIDATION:
+            # Mainstream-Markt: yfinance-Validierung ERFORDERLICH
+            logger.debug("OpenFIGI (validierung fehlgeschlagen, mainstream): %s → %s",
+                       isin, raw_ticker)
             return None, ResolveStatus.NO_DATA
+        else:
+            # Exotischer Markt: trotzdem speichern als 'openfigi_unvalidated'
+            _store_mapping(isin, raw_ticker, "openfigi_unvalidated", exchange, db_path)
+            logger.warning("OpenFIGI (unvalidiert gespeichert): %s → %s (%s)",
+                         isin, raw_ticker, exchange)
+            return raw_ticker, ResolveStatus.SUCCESS
 
-        _store_mapping(isin, ticker, "openfigi", best.get("exchCode"), db_path)
-        return ticker, ResolveStatus.SUCCESS
-
-    except Exception:
+    except Exception as e:
+        logger.exception("OpenFIGI-Fehler für %s: %s", isin, str(e)[:80])
         return None, ResolveStatus.ERROR
 
 
@@ -269,7 +337,7 @@ def _resolve_via_yfinance(
         return symbol
 
     except Exception as exc:
-        logger.warning("yfinance fehlgeschlagen für %s: %s", isin, exc)
+        logger.warning("yfinance fehlgeschlagen für %s: %s", isin, str(exc)[:80])
         return None
 
 # ── Public API ─────────────────────────────────────────────────────
