@@ -30,44 +30,32 @@ Finanz-Konventionen:
   - Beträge als INTEGER in Micro-Units:         1 EUR = 1_000_000
   - Alle Berechnungen im Python-Code via decimal.Decimal — kein float
 """
+# Dateiname:     db/init_db.py
+"""
+db/init_db.py
 
-from __future__ import annotations
+Erstellt die SQLite-Datenbank-Schema mit allen Tabellen.
+"""
 
-import logging
-import sqlite3
-from pathlib import Path
+# ... (imports und bestehender Code) ...
 
-logger = logging.getLogger(__name__)
+# ── Phase 1: Basis-Schema ────────────────────────────────────────────────────────
 
-DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
-
-# ── Phase 1: Tabellen (ohne Indizes) ─────────────────────────────────────────
-
-_TABLE_DDL: list[str] = [
-    # ── Stammdaten ──────────────────────────────────────────────────────────
+TABLES_SQL = [
+    # ── Instrumente (Grunddaten) ─────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS instruments (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        name         TEXT    NOT NULL,
-        isin         TEXT    NOT NULL UNIQUE,
-        wkn          TEXT,
-        symbol       TEXT,
+        isin          TEXT PRIMARY KEY,
+        wkn           TEXT UNIQUE,
+        name          TEXT NOT NULL,
         name_override TEXT,
-        -- Manuell gesetzter Name; hat Vorrang vor name.
-        -- Anzeige via: COALESCE(name_override, name)
-        created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        isin_type     TEXT,
+        currency      TEXT DEFAULT 'EUR',
+        created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
 
-    # ── Metadaten ────────────────────────────────────────────────────────────
-    """
-    CREATE TABLE IF NOT EXISTS metadata (
-        key   TEXT PRIMARY KEY,
-        value TEXT
-    )
-    """,
-
-    # ── ISIN → Ticker-Mapping ────────────────────────────────────────────────
+    # ── Ticker-Mappings (ISIN → Ticker-Symbol) ──────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS ticker_mapping (
         isin       TEXT PRIMARY KEY
@@ -78,12 +66,12 @@ _TABLE_DDL: list[str] = [
         verified   INTEGER NOT NULL DEFAULT 0,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_source CHECK (
-            source IN ('yfinance', 'openfigi', 'manual', 'unknown')
+            source IN ('yfinance', 'openfigi', 'manual', 'unknown', 'unresolvable')
         )
     )
     """,
 
-    # ── Dividenden-Kennzahlen ────────────────────────────────────────────────
+    # ── Dividenden-Kennzahlen ────────────────────────────────────────────────────
     # yield_bps_prev : Rendite vor letztem Update  (für Schwellwert-Vergleich)
     # skip_until     : Datum bis zu dem der Abruf pausiert wird
     #                  (gesetzt wenn >18 Monate keine Dividende)
@@ -109,7 +97,7 @@ _TABLE_DDL: list[str] = [
     )
     """,
 
-    # ── Dividenden-Historie ──────────────────────────────────────────────────
+    # ── Dividenden-Historie ──────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS dividend_history (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,12 +146,15 @@ _TABLE_DDL: list[str] = [
 
 # ── Phase 2: Migrationen (für bestehende DBs) ─────────────────────────────────
 # ALTER TABLE ist NICHT idempotent → try/except pro Statement.
-# Fehler = Spalte existiert bereits → korrekt ignorieren.
 
-_MIGRATIONS: list[str] = [
-    "ALTER TABLE instruments   ADD COLUMN name_override  TEXT",
-    "ALTER TABLE dividend_data ADD COLUMN yield_bps_prev INTEGER",
-    "ALTER TABLE dividend_data ADD COLUMN skip_until     DATE",
+MIGRATIONS_SQL = [
+    # Migration: 'unresolvable' zu erlaubten Quellen hinzufügen
+    """
+    ALTER TABLE ticker_mapping
+    ADD CONSTRAINT chk_source_updated CHECK (
+        source IN ('yfinance', 'openfigi', 'manual', 'unknown', 'unresolvable')
+    )
+    """,
 ]
 
 # ── Phase 3: Indizes ──────────────────────────────────────────────────────────
