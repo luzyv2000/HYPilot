@@ -40,9 +40,9 @@ def get_all_instruments(
         Liste von Dicts mit 'name', 'isin', 'wkn'.
     """
     query = """
-        SELECT COALESCE(name_override, name) AS name, isin, wkn
-        FROM instruments
-        ORDER BY name ASC
+    SELECT COALESCE(name_override, name) AS name, isin, wkn
+    FROM instruments
+    ORDER BY name COLLATE NOCASE ASC
     """
     if limit:
         query += f" LIMIT {limit}"
@@ -74,7 +74,7 @@ def search_instruments(
         WHERE name        LIKE ? COLLATE NOCASE
            OR name_override LIKE ? COLLATE NOCASE
            OR isin        LIKE ? COLLATE NOCASE
-        ORDER BY name ASC
+        ORDER BY name COLLATE NOCASE ASC
         LIMIT 50
     """
     pattern = f"%{query_str}%"
