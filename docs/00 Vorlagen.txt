@@ -13,3 +13,6 @@ source venv/bin/activate
 
 ==============================================
 
+git add -A
+git commit -m "fix: KOMMENTAR"
+git push
