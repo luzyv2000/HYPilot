@@ -405,9 +405,11 @@ def main() -> int:
         isins = _get_all_isins()
         logger.info("%d ISINs gesamt.", len(isins))
 
-    if args.limit:
+        if args.limit:
         isins = isins[: args.limit]
         logger.info("Limitiert auf %d ISINs.", len(isins))
+
+    total = len(isins)  # ← NEUE ZEILE HINZUFÜGEN!
 
     if args.dry_run:
         logger.warning("DRY-RUN aktiv — keine Datenbankänderungen.")
