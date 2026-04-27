@@ -1,5 +1,5 @@
 # Dateiname:     core/ticker_resolver.py
-# Version:       2026-04-25-final
+# Version:       2026-04-27-fixed
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): requests, python-dotenv, yfinance
 """
@@ -29,6 +29,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from enum import Enum
 
 import requests
 import yfinance as yf
@@ -40,25 +41,34 @@ logger = logging.getLogger(__name__)
 
 DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
+
+# ── Statusmodell (NEU) ────────────────────────────────────────────────────────
+
+class ResolveStatus(str, Enum):
+    SUCCESS = "success"
+    NO_DATA = "no_data"
+    RATE_LIMIT = "rate_limit"
+    ERROR = "error"
+
+
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 
-_OPENFIGI_URL    = "https://api.openfigi.com/v3/mapping"
+_OPENFIGI_URL = "https://api.openfigi.com/v3/mapping"
 _OPENFIGI_APIKEY = os.getenv("OPENFIGI_API_KEY", "").strip()
-_OPENFIGI_DELAY  = 0.25  # 4 req/sec — weit unter 25/min ohne Key
+_OPENFIGI_DELAY = 0.25
 
-# Wie lange ein 'unresolvable'-Eintrag gilt (danach erneut versuchen)
 UNRESOLVABLE_TTL_DAYS: int = 30
 
-# OpenFIGI exchCode → yfinance-Ticker-Suffix
+
 _EXCHANGE_SUFFIX: dict[str, str] = {
-    "GY": ".DE",  "GF": ".F",   "AV": ".VI",  "AU": ".AX",
-    "LN": ".L",   "FP": ".PA",  "SM": ".MC",  "SW": ".SW",
-    "IM": ".MI",  "HK": ".HK",  "JP": ".T",   "BB": ".BR",
-    "NA": ".AS",  "DC": ".CO",  "SS": ".ST",  "HE": ".HE",
+    "GY": ".DE", "GF": ".F", "AV": ".VI", "AU": ".AX",
+    "LN": ".L", "FP": ".PA", "SM": ".MC", "SW": ".SW",
+    "IM": ".MI", "HK": ".HK", "JP": ".T", "BB": ".BR",
+    "NA": ".AS", "DC": ".CO", "SS": ".ST", "HE": ".HE",
     "OS": ".OL",
 }
 
-# ISIN-Länderpräfix → bevorzugter OpenFIGI exchCode (Primärbörse)
+
 _ISIN_PRIMARY_EXCHANGE: dict[str, str] = {
     "US": "US", "CA": "US",
     "DE": "GY", "AT": "AV", "CH": "SW", "GB": "LN",
@@ -67,18 +77,19 @@ _ISIN_PRIMARY_EXCHANGE: dict[str, str] = {
     "NO": "OS", "AU": "AU", "HK": "HK", "JP": "JP",
 }
 
-# Standard-Fallback wenn kein Eintrag in _ISIN_PRIMARY_EXCHANGE
+
+# 🔧 FIX: US priorisieren
 _FALLBACK_EXCHANGES: tuple[str, ...] = (
-    "GY", "LN", "FP", "SW", "NA", "BB", "US",
+    "US", "GY", "LN", "FP", "SW", "NA", "BB"
 )
 
-# Für diese ISIN-Präfixe schlägt yfinance-Direktauflösung zuverlässig fehl
+
 _ISIN_PREFIXES_SKIP_YF_DIRECT: frozenset[str] = frozenset({
     "AT", "AU", "HK", "JP", "SG", "NZ",
 })
 
 
-# ── DB-Operationen ────────────────────────────────────────────────────────────
+# ── DB ────────────────────────────────────────────────────────────────────────
 
 def _get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -87,17 +98,7 @@ def _get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def _lookup_db(
-    isin: str,
-    db_path: Path = DB_PATH,
-) -> tuple[str | None, str | None]:
-    """
-    Sucht ISIN in der lokalen DB.
-
-    Returns:
-        (ticker, source) oder (None, None) wenn nicht gefunden.
-        source='unresolvable' → kein API-Call nötig.
-    """
+def _lookup_db(isin: str, db_path: Path = DB_PATH):
     with _get_connection(db_path) as conn:
         row = conn.execute(
             "SELECT ticker, source, updated_at FROM ticker_mapping WHERE isin = ?",
@@ -111,17 +112,10 @@ def _lookup_db(
         try:
             stored_at = datetime.fromisoformat(row["updated_at"])
             if datetime.now() - stored_at < timedelta(days=UNRESOLVABLE_TTL_DAYS):
-                logger.debug(
-                    "ISIN %s als unresolvable markiert (bis %s) — übersprungen.",
-                    isin,
-                    (stored_at + timedelta(days=UNRESOLVABLE_TTL_DAYS)).date(),
-                )
                 return None, "unresolvable"
-            # TTL abgelaufen → erneut versuchen
-            logger.info("Unresolvable-TTL für %s abgelaufen — erneuter Versuch.", isin)
             _delete_mapping(isin, db_path)
             return None, None
-        except (ValueError, TypeError):
+        except Exception:
             return None, None
 
     return row["ticker"], row["source"]
@@ -133,8 +127,7 @@ def _store_mapping(
     source: str,
     exchange: str | None = None,
     db_path: Path = DB_PATH,
-) -> None:
-    """Speichert oder aktualisiert ein ISIN→Ticker-Mapping."""
+):
     now = datetime.now().isoformat()
     with _get_connection(db_path) as conn:
         conn.execute(
@@ -150,35 +143,21 @@ def _store_mapping(
             (isin, ticker, exchange, source, now),
         )
         conn.commit()
-    logger.debug(
-        "Mapping gespeichert: %s → %s (Quelle: %s, Börse: %s)",
-        isin, ticker, source, exchange,
-    )
 
 
-def _store_unresolvable(isin: str, db_path: Path = DB_PATH) -> None:
-    """Markiert ISIN als nicht auflösbar für UNRESOLVABLE_TTL_DAYS."""
+def _store_unresolvable(isin: str, db_path: Path = DB_PATH):
     _store_mapping(isin, "NOT_FOUND", source="unresolvable", db_path=db_path)
-    logger.info(
-        "ISIN %s als unresolvable markiert (%d Tage).",
-        isin, UNRESOLVABLE_TTL_DAYS,
-    )
 
 
-def _delete_mapping(isin: str, db_path: Path = DB_PATH) -> None:
-    """Löscht ein Mapping (z. B. nach TTL-Ablauf)."""
+def _delete_mapping(isin: str, db_path: Path = DB_PATH):
     with _get_connection(db_path) as conn:
         conn.execute("DELETE FROM ticker_mapping WHERE isin = ?", (isin,))
         conn.commit()
 
 
-# ── Exchange-Präferenz ────────────────────────────────────────────────────────
+# ── Exchange Auswahl ─────────────────────────────────────────────────────────
 
-def _get_preferred_exchanges(isin: str) -> tuple[str, ...]:
-    """
-    Gibt Börsenpräferenz-Reihenfolge für eine ISIN zurück.
-    Heimatbörse zuerst — verhindert OTC/ADR-Bevorzugung für EU-Titel.
-    """
+def _get_preferred_exchanges(isin: str):
     primary = _ISIN_PRIMARY_EXCHANGE.get(isin[:2].upper())
     if primary:
         others = tuple(ex for ex in _FALLBACK_EXCHANGES if ex != primary)
@@ -186,8 +165,26 @@ def _get_preferred_exchanges(isin: str) -> tuple[str, ...]:
     return _FALLBACK_EXCHANGES
 
 
-def _apply_suffix(ticker: str, exchange: str | None) -> str:
-    """Gibt Ticker mit yfinance-Suffix zurück. ('CLEN', 'AV') → 'CLEN.VI'"""
+def _select_best_figi(results: list[dict], isin: str = ""):
+    if not results:
+        return None
+
+    if isin:
+        preferred = _get_preferred_exchanges(isin)
+    else:
+        preferred = _FALLBACK_EXCHANGES
+
+    for exchange in preferred:
+        for item in results:
+            if item.get("exchCode") == exchange:
+                return item
+
+    return results[0]
+
+
+# ── Validierung ──────────────────────────────────────────────────────────────
+
+def _apply_suffix(ticker: str, exchange: str | None):
     if exchange and exchange in _EXCHANGE_SUFFIX:
         suffix = _EXCHANGE_SUFFIX[exchange]
         if not ticker.endswith(suffix):
@@ -195,58 +192,26 @@ def _apply_suffix(ticker: str, exchange: str | None) -> str:
     return ticker
 
 
-def _validate_ticker(ticker: str, exchange: str | None = None) -> str | None:
-    """
-    Prüft Ticker via yfinance. Versucht zuerst mit Suffix, dann ohne.
-
-    Returns:
-        Valides Symbol (ggf. mit Suffix) oder None.
-    """
-    candidates: list[str] = []
-    suffixed = _apply_suffix(ticker, exchange)
-    if suffixed != ticker:
-        candidates.append(suffixed)
-    candidates.append(ticker)
-
-    for candidate in candidates:
+def _validate_ticker(ticker: str, exchange: str | None = None):
+    for candidate in [_apply_suffix(ticker, exchange), ticker]:
         try:
             info = yf.Ticker(candidate).info
             if info.get("symbol") or info.get("quoteType"):
-                logger.debug("Ticker validiert: %s", candidate)
                 return candidate
         except Exception:
             continue
     return None
 
 
-# ── OpenFIGI ──────────────────────────────────────────────────────────────────
+# ── OpenFIGI ─────────────────────────────────────────────────────────────────
 
-def _select_best_figi(results: list[dict], isin: str = "") -> dict | None:
-    """
-    Wählt bestes OpenFIGI-Ergebnis anhand ISIN-land-basierter Präferenz.
-    isin-Parameter optional für Abwärtskompatibilität.
-    """
-    if not results:
-        return None
-    preferred = _get_preferred_exchanges(isin) if isin else _FALLBACK_EXCHANGES
-    for exchange in preferred:
-        for item in results:
-            if item.get("exchCode") == exchange:
-                return item
-    return results[0]
-
-
-def _resolve_via_openfigi(
-    isin: str,
-    db_path: Path = DB_PATH,
-) -> str | None:
-    """Löst ISIN via OpenFIGI auf, validiert Ticker mit Suffix-Support."""
-    headers: dict[str, str] = {"Content-Type": "application/json"}
+def _resolve_via_openfigi(isin: str, db_path: Path = DB_PATH):
+    headers = {"Content-Type": "application/json"}
     if _OPENFIGI_APIKEY:
         headers["X-OPENFIGI-APIKEY"] = _OPENFIGI_APIKEY
 
     try:
-        response = requests.post(
+        r = requests.post(
             _OPENFIGI_URL,
             json=[{"idType": "ID_ISIN", "idValue": isin}],
             headers=headers,
@@ -254,119 +219,72 @@ def _resolve_via_openfigi(
         )
         time.sleep(_OPENFIGI_DELAY)
 
-        if response.status_code == 429:
-            logger.warning("OpenFIGI Rate-Limit für %s.", isin)
-            return None
-        if response.status_code != 200:
-            logger.warning("OpenFIGI HTTP %s für %s.", response.status_code, isin)
-            return None
+        if r.status_code == 429:
+            return None, ResolveStatus.RATE_LIMIT
+        if r.status_code != 200:
+            return None, ResolveStatus.ERROR
 
-        data = response.json()
-        if not data or not isinstance(data, list):
-            return None
+        data = r.json()
+        if not data or "warning" in data[0]:
+            return None, ResolveStatus.NO_DATA
 
-        first = data[0]
-        if "warning" in first:
-            logger.debug("OpenFIGI: kein Ergebnis für %s — %s", isin, first["warning"])
-            return None
-
-        best = _select_best_figi(first.get("data", []), isin)
+        best = _select_best_figi(data[0].get("data", []), isin)
         if not best:
-            return None
+            return None, ResolveStatus.NO_DATA
 
-        raw_ticker = best.get("ticker")
-        exchange   = best.get("exchCode")
-        if not raw_ticker:
-            return None
+        ticker = _validate_ticker(best["ticker"], best.get("exchCode"))
+        if not ticker:
+            return None, ResolveStatus.NO_DATA
 
-        validated = _validate_ticker(raw_ticker, exchange)
-        if not validated:
-            logger.warning(
-                "OpenFIGI-Ticker %s für %s nicht validiert — verwerfe.",
-                raw_ticker, isin,
-            )
-            return None
+        _store_mapping(isin, ticker, "openfigi", best.get("exchCode"), db_path)
+        return ticker, ResolveStatus.SUCCESS
 
-        logger.info("OpenFIGI: %s → %s (Börse: %s) ✓", isin, validated, exchange)
-        _store_mapping(isin, validated, source="openfigi",
-                       exchange=exchange, db_path=db_path)
-        return validated
-
-    except requests.RequestException as exc:
-        logger.warning("OpenFIGI fehlgeschlagen für %s: %s", isin, exc)
-        return None
     except Exception:
-        logger.exception("Unerwarteter Fehler bei OpenFIGI für %s", isin)
-        return None
+        return None, ResolveStatus.ERROR
 
 
-# ── yfinance-Fallback ─────────────────────────────────────────────────────────
-
-def _resolve_via_yfinance(
-    isin: str,
-    db_path: Path = DB_PATH,
-) -> str | None:
-    """Letzter Fallback. Für bekannte inkompatible ISIN-Präfixe deaktiviert."""
-    if isin[:2].upper() in _ISIN_PREFIXES_SKIP_YF_DIRECT:
-        logger.debug("yfinance-Direktauflösung für %s übersprungen.", isin[:2])
-        return None
-
+def _resolve_via_yfinance(isin: str, db_path: Path = DB_PATH):
     try:
-        info     = yf.Ticker(isin).info
-        symbol   = info.get("symbol")
-        exchange = info.get("exchange")
+        info = yf.Ticker(isin).info
+        symbol = info.get("symbol")
 
         if not symbol:
-            logger.debug("yfinance: kein Symbol für %s", isin)
-            return None
+            return None, ResolveStatus.NO_DATA
 
-        logger.info("yfinance (Fallback): %s → %s (Börse: %s)", isin, symbol, exchange)
-        _store_mapping(isin, symbol, source="yfinance",
-                       exchange=exchange, db_path=db_path)
-        return symbol
+        _store_mapping(isin, symbol, "yfinance", info.get("exchange"), db_path)
+        return symbol, ResolveStatus.SUCCESS
 
-    except Exception as exc:
-        logger.warning("yfinance fehlgeschlagen für %s: %s", isin, exc)
-        return None
+    except Exception:
+        return None, ResolveStatus.ERROR
 
 
-# ── Öffentliche API ───────────────────────────────────────────────────────────
+# ── Public API ───────────────────────────────────────────────────────────────
 
-def resolve(
-    isin: str,
-    db_path: Path = DB_PATH,
-    skip_openfigi: bool = False,
-) -> str | None:
-    """
-    Löst ISIN → Ticker auf (DB → OpenFIGI → yfinance).
-    Nicht auflösbare ISINs werden für UNRESOLVABLE_TTL_DAYS gecacht.
-    """
+def resolve(isin: str, db_path: Path = DB_PATH, skip_openfigi: bool = False):
     ticker, source = _lookup_db(isin, db_path)
+
     if source == "unresolvable":
         return None
     if ticker:
-        logger.debug("Ticker aus DB-Cache: %s → %s", isin, ticker)
         return ticker
 
+    openfigi_status = None
+
     if not skip_openfigi:
-        ticker = _resolve_via_openfigi(isin, db_path)
+        ticker, openfigi_status = _resolve_via_openfigi(isin, db_path)
         if ticker:
             return ticker
 
-    ticker = _resolve_via_yfinance(isin, db_path)
+    ticker, yf_status = _resolve_via_yfinance(isin, db_path)
     if ticker:
         return ticker
 
-    _store_unresolvable(isin, db_path)
+    # 🔧 FIX: nur echte NO_DATA Fälle speichern
+    if openfigi_status == ResolveStatus.NO_DATA and yf_status == ResolveStatus.NO_DATA:
+        _store_unresolvable(isin, db_path)
+
     return None
 
 
-def store_manual_mapping(
-    isin: str,
-    ticker: str,
-    exchange: str | None = None,
-    db_path: Path = DB_PATH,
-) -> None:
-    """Manuelles Mapping — überschreibt alles inkl. 'unresolvable'."""
-    _store_mapping(isin, ticker, source="manual", exchange=exchange, db_path=db_path)
-    logger.info("Manuelles Mapping gespeichert: %s → %s", isin, ticker)
+def store_manual_mapping(isin: str, ticker: str, exchange: str | None = None, db_path: Path = DB_PATH):
+    _store_mapping(isin, ticker, "manual", exchange, db_path)
