@@ -13,6 +13,10 @@ source venv/bin/activate
 
 ==============================================
 
+(venv) luzy@luzy-NucBox-K8-Plus:~/Dokumente$ pandoc xy.odt -t markdown -o xy.md
+
+==============================================
+
 git add -A
 git commit -m "fix: KOMMENTAR"
 git push
