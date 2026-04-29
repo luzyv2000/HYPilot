@@ -1,5 +1,5 @@
 # Dateiname:     analysis/scorer.py
-# Version:       2026-04-22
+# Version:       2026-04-29
 # Abhängigkeiten (intern): core.dividend_source, db.dividend_repository
 # Abhängigkeiten (extern): keine
 """
@@ -8,10 +8,10 @@ analysis/scorer.py
 Dividenden-basiertes Scoring-System — Kernlogik von HYPilot.
 
 Scoring-Dimensionen (Gewichtung spiegelt HYPilot-Ziel wider):
-  1. Dividendenrendite   40 Punkte  (Kernziel: >10%)
-  2. Ausschüttungsfrequenz 20 Punkte  (monatlich bevorzugt)
-  3. Dividendenstabilität  25 Punkte  (Historie vorhanden)
-  4. Payout-Qualität       15 Punkte  (Ausschüttungsquote)
+  1. Dividendenrendite    40 Punkte  (Kernziel: >10%)
+  2. Ausschüttungsfrequenz 20 Punkte (monatlich bevorzugt)
+  3. Dividendenstabilität  25 Punkte (Historie vorhanden)
+  4. Payout-Qualität       15 Punkte (Ausschüttungsquote)
 
 Gesamt: 100 Punkte möglich.
 
@@ -43,14 +43,14 @@ _PAYOUT_IDEAL = Decimal("0.70")   # <= 70%  → nachhaltig
 
 @dataclass
 class DividendScore:
-    isin: str
-    total: int                  # 0–100
-    yield_points: int           # max 40
-    frequency_points: int       # max 20
-    stability_points: int       # max 25
-    payout_points: int          # max 15
-    rating: str                 # "STRONG_BUY" | "BUY" | "WATCH" | "REJECT"
-    notes: list[str]            # Begründungen
+    isin:              str
+    total:             int          # 0–100
+    yield_points:      int          # max 40
+    frequency_points:  int          # max 20
+    stability_points:  int          # max 25
+    payout_points:     int          # max 15
+    rating:            str          # "STRONG_BUY" | "BUY" | "WATCH" | "REJECT"
+    notes:             list[str]    # Begründungen
 
 
 def _rating_from_score(score: int) -> str:
@@ -79,18 +79,18 @@ def _score_yield(
     assert y is not None
 
     if y >= _YIELD_TIER_1:
-        notes.append(f"Rendite {float(y)*100:.1f}% — Kernziel erreicht (≥10%)")
+        notes.append(f"Rendite {float(y) * 100:.1f}% — Kernziel erreicht (≥10%)")
         return 40, notes
     if y >= _YIELD_TIER_2:
         points = int(40 * float(y / _YIELD_TIER_1))
-        notes.append(f"Rendite {float(y)*100:.1f}% — gut (≥7%)")
+        notes.append(f"Rendite {float(y) * 100:.1f}% — gut (≥7%)")
         return points, notes
     if y >= _YIELD_TIER_3:
         points = int(40 * float(y / _YIELD_TIER_1))
-        notes.append(f"Rendite {float(y)*100:.1f}% — akzeptabel (≥4%)")
+        notes.append(f"Rendite {float(y) * 100:.1f}% — akzeptabel (≥4%)")
         return points, notes
 
-    notes.append(f"Rendite {float(y)*100:.1f}% — zu niedrig (<4%)")
+    notes.append(f"Rendite {float(y) * 100:.1f}% — zu niedrig (<4%)")
     return 0, notes
 
 
@@ -101,9 +101,9 @@ def _score_frequency(
     mapping = {
         "monthly":     (20, "Monatliche Ausschüttung"),
         "quarterly":   (14, "Quartalsweise Ausschüttung"),
-        "semi_annual": (8,  "Halbjährliche Ausschüttung"),
-        "annual":      (4,  "Jährliche Ausschüttung"),
-        "irregular":   (2,  "Unregelmäßige Ausschüttung"),
+        "semi_annual": ( 8, "Halbjährliche Ausschüttung"),
+        "annual":      ( 4, "Jährliche Ausschüttung"),
+        "irregular":   ( 2, "Unregelmäßige Ausschüttung"),
     }
     if frequency is None:
         return 0, ["Ausschüttungsfrequenz unbekannt"]
@@ -118,8 +118,8 @@ def _score_stability(
     """
     Max 25 Punkte.
     Proxy: Snapshot vorhanden + last_ex_date vorhanden + Rendite nicht None.
-    Echte Stabilitätsmessung (Wachstum über Jahre) kommt mit
-    erweiterter Historie.
+    Echte Stabilitätsmessung (Wachstum über Jahre) kommt mit erweiterter
+    Historie.
     """
     notes: list[str] = []
     points = 0
@@ -134,9 +134,13 @@ def _score_stability(
 
     if snapshot.last_amount_micro is not None and snapshot.last_amount_micro > 0:
         points += 5
-        notes.append(f"Letzter Betrag: {float(snapshot.last_amount or 0):.4f} {snapshot.currency}")
+        amount_display = float(snapshot.last_amount or 0)
+        notes.append(
+            f"Letzter Betrag: {amount_display:.4f} {snapshot.currency}"
+        )
 
     return points, notes
+
 
 def _score_payout(
     payout_ratio_bps: int | None,
@@ -155,29 +159,33 @@ def _score_payout(
     assert ratio is not None
 
     # REITs: Payout >100% ist strukturell normal (FFO-Basis)
-    # Wir geben neutral 8 Punkte statt Risikoabzug
+    # → neutral 8 Punkte statt Risikoabzug
     if ratio > Decimal("1.0"):
         notes.append(
-            f"Ausschüttungsquote {float(ratio)*100:.0f}% "
+            f"Ausschüttungsquote {float(ratio) * 100:.0f}% "
             f"— REIT/strukturell (neutral bewertet)"
         )
         return 8, notes
 
     if ratio > _PAYOUT_MAX:
-        notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — Risiko (>90%)")
+        notes.append(
+            f"Ausschüttungsquote {float(ratio) * 100:.0f}% — Risiko (>90%)"
+        )
         return 0, notes
 
     if ratio <= _PAYOUT_IDEAL:
-        notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — nachhaltig (≤70%)")
+        notes.append(
+            f"Ausschüttungsquote {float(ratio) * 100:.0f}% — nachhaltig (≤70%)"
+        )
         return 15, notes
 
-    points = int(15 * float((_PAYOUT_MAX - ratio) / (_PAYOUT_MAX - _PAYOUT_IDEAL)))
-    notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — erhöht (70–90%)")
-    return points, notes
-    
     # 70–90%: linear interpolieren
-    points = int(15 * float((_PAYOUT_MAX - ratio) / (_PAYOUT_MAX - _PAYOUT_IDEAL)))
-    notes.append(f"Ausschüttungsquote {float(ratio)*100:.0f}% — erhöht (70–90%)")
+    points = int(
+        15 * float((_PAYOUT_MAX - ratio) / (_PAYOUT_MAX - _PAYOUT_IDEAL))
+    )
+    notes.append(
+        f"Ausschüttungsquote {float(ratio) * 100:.0f}% — erhöht (70–90%)"
+    )
     return points, notes
 
 
@@ -195,10 +203,10 @@ def score_dividend_snapshot(snapshot: DividendSnapshot) -> DividendScore:
     """
     all_notes: list[str] = []
 
-    y_pts, y_notes   = _score_yield(snapshot.yield_bps)
-    f_pts, f_notes   = _score_frequency(snapshot.frequency)
-    s_pts, s_notes   = _score_stability(snapshot)
-    p_pts, p_notes   = _score_payout(snapshot.payout_ratio_bps)
+    y_pts, y_notes = _score_yield(snapshot.yield_bps)
+    f_pts, f_notes = _score_frequency(snapshot.frequency)
+    s_pts, s_notes = _score_stability(snapshot)
+    p_pts, p_notes = _score_payout(snapshot.payout_ratio_bps)
 
     all_notes.extend(y_notes)
     all_notes.extend(f_notes)
