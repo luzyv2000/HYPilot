@@ -1,0 +1,37 @@
+Vorlagen:
+
+Ich nenne dir die Beschreibung und den Link zu einem Repository und du untersucht dieses nach dem Muster: Analysiere, erläutere und erstelle einen Fahrplan, um den Inhalt dieses Links zu unserem Nutzen zu sichern. 
+
+Link: https://github.com/Alishahryar1/free-claude-code
+
+Bitte prüfe den Link, starte eine kritische Analyse und teile mir die eigene, ungefilterte Meinung mit. Lass dir soviel Zeit, wie du benötigst, und verteile deine Antwort, wenn du sie aufgrund von Limits nicht auf einmal liefern kannst, auf soviele durchnummerierte Mitteilungen wie nötig. Analysiere erst generell (was könnte irgendwann einmal nützlich sein) und dann speziell, einmal mit Schwerpunkt Einsatz eines Multi-Agenten-Systems mit OpenClaw und einmal mit dem Schwerpunkt Einsatz des Wertpapier-Analyse-Tools HYPilot.
+
+==============================================
+
+cd /home/luzy/workspace/openclaw-min
+source venv/bin/activate
+
+==============================================
+
+(venv) luzy@luzy-NucBox-K8-Plus:~/Dokumente$ pandoc xy.odt -t markdown -o xy.md
+
+==============================================
+
+git add -A
+git commit -m "fix: KOMMENTAR"
+git push
+
+==============================================
+
+# Zuerst unresolvable-Einträge aus den Testläufen bereinigen, damit der Import sauber startet:
+
+cd /home/luzy/workspace/openclaw-min
+source venv/bin/activate
+
+sqlite3 /home/luzy/workspace/openclaw-min/db/hypilot.db \
+  "DELETE FROM ticker_mapping WHERE source = 'unresolvable';"
+
+# Dann Testlauf mit 200 ISINs (dauert ~3 Minuten ohne API-Key):
+python -m ingestion.bulk_ticker_import --missing-only --limit 200
+
+

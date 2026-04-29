@@ -1,5 +1,5 @@
 # HYPilot — direkte Abhängigkeiten
-# Stand: 2026-04-24
+# Stand: 2026-04-24a
 #
 # Installation: pip install -r requirements.txt
 
