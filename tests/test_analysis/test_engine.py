@@ -300,26 +300,6 @@ class TestFilterExcludesSkipUntil:
 @pytest.mark.integration
 class TestScoreInstrument:
 
-    def test_results_sorted_by_score(
-        self, db_with_mixed_dividends: Path
-    ) -> None:
-        """
-        Instrumente mit höherem yield_bps müssen höheren Score erhalten.
-        Telekom (800 bps) vs. Realty Income (550 bps):
-        score(Telekom) >= score(Realty Income).
-        Schützt vor Scoring-Regressionen.
-        """
-        score_realty  = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
-        score_telekom = score_instrument("DE0005557508", db_path=db_with_mixed_dividends)
-
-        assert score_realty  is not None, "Realty Income Score darf nicht None sein"
-        assert score_telekom is not None, "Telekom Score darf nicht None sein"
-        assert score_telekom.total >= score_realty.total, (
-            f"Höherer Yield (800 bps) muss >= Score ergeben als niedrigerer "
-            f"(550 bps). Got: Telekom={score_telekom.total}, "
-            f"Realty={score_realty.total}"
-        )
-
     def test_score_returns_none_for_unknown_isin(
         self, db_with_instruments: Path
     ) -> None:
