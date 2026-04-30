@@ -1,5 +1,5 @@
 # Dateiname:     tests/conftest.py
-# Version:       2026-04-22
+# Version:       2026-04-30
 # Abhängigkeiten (intern): db.init_db, core.dividend_source
 # Abhängigkeiten (extern): pytest
 """
@@ -8,22 +8,22 @@ tests/conftest.py
 Gemeinsame Fixtures für alle HYPilot-Tests.
 
 Designprinzipien:
-  - Alle DB-Tests laufen gegen In-Memory-SQLite → kein Zustand zwischen Tests
-  - Keine Netzwerk-Calls in Unit-Tests (yfinance wird gemockt)
-  - Fixture-Scope bewusst gewählt: function (default) für DB-Isolation
+  - Alle DB-Tests laufen gegen temporäre SQLite-Dateien → kein Zustand zwischen Tests
+  - Keine Netzwerk-Calls in Unit/Integration-Tests
+  - Fixture-Scope: function (default) für vollständige DB-Isolation
 """
 
 from __future__ import annotations
 
+import os
 import sqlite3
-from datetime import date
-from decimal import Decimal
+import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Generator
 
 import pytest
 
-# Projektpfad damit imports funktionieren
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -36,23 +36,12 @@ from core.dividend_source import DividendPayment, DividendSnapshot
 @pytest.fixture
 def in_memory_db() -> Generator[Path, None, None]:
     """
-    Temporäre In-Memory-SQLite-DB mit vollständigem Schema.
+    Temporäre SQLite-DB mit vollständigem Schema.
     Jeder Test bekommt eine frische, leere Datenbank.
-
-    Yields:
-        Path zu ':memory:' — wird von Repository-Funktionen akzeptiert
-        wenn sie db_path als Parameter nehmen.
-
-    Hinweis: SQLite :memory: kann nicht als Path übergeben werden.
-    Wir nutzen eine temporäre Datei in /tmp stattdessen.
     """
-    import tempfile
-    import os
-
     fd, path_str = tempfile.mkstemp(suffix=".db", prefix="hypilot_test_")
     os.close(fd)
     db_path = Path(path_str)
-
     try:
         init_database(db_path)
         yield db_path
@@ -67,11 +56,11 @@ def db_with_instruments(in_memory_db: Path) -> Path:
     Basis für Tests die Instrumente voraussetzen.
     """
     instruments = [
-        ("Realty Income Corp",     "US7561091049", "A1J5SB"),
-        ("iShares MSCI World ETF", "IE00B4L5Y983", None),
-        ("Tesla Inc",              "US88160R1014", "A1CX3T"),
-        ("Deutsche Telekom AG",    "DE0005557508", "555750"),
-        ("Short Product XYZ",      "DE000SL0ABC1", None),  # wird gefiltert
+        ("Realty Income Corp",       "US7561091049", "A1J5SB"),
+        ("iShares MSCI World ETF",   "IE00B4L5Y983", None),
+        ("Tesla Inc",                "US88160R1014", "A1CX3T"),
+        ("Deutsche Telekom AG",      "DE0005557508", "555750"),
+        ("Short Product XYZ",        "DE000SL0ABC1", None),   # wird gefiltert
     ]
     with sqlite3.connect(in_memory_db) as conn:
         conn.executemany(
@@ -92,12 +81,60 @@ def db_with_dividends(db_with_instruments: Path) -> Path:
         conn.execute(
             """
             INSERT OR REPLACE INTO dividend_data
-                (isin, yield_bps, frequency, last_amount_micro,
-                 last_ex_date, currency, payout_ratio_bps, data_source)
+            (isin, yield_bps, frequency, last_amount_micro,
+             last_ex_date, currency, payout_ratio_bps, data_source)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             ("US7561091049", 550, "monthly", 271000,
              "2026-03-31", "USD", 27500, "yfinance"),
+        )
+        conn.commit()
+    return db_with_instruments
+
+
+@pytest.fixture
+def db_with_mixed_dividends(db_with_instruments: Path) -> Path:
+    """
+    DB mit gemischten Dividenden-Zuständen für engine.py-Tests:
+
+      US7561091049 (Realty Income): aktiv, 550 bps, monatlich
+        → soll in Scoring erscheinen
+      US88160R1014 (Tesla):         skip_until in der Zukunft, yield=0
+        → soll NICHT für Update vorgesehen werden
+      DE0005557508 (Telekom):       aktiv, 800 bps, jährlich
+        → höherer Yield als Realty Income → höherer Score
+      IE00B4L5Y983 (iShares ETF):   kein dividend_data-Eintrag
+        → score_instrument gibt None zurück
+    """
+    future_skip = (date.today() + timedelta(days=5)).isoformat()
+    # alt genug damit updated_at-Prüfung greift (älter als 6h)
+    old_timestamp = "2020-01-01T00:00:00"
+
+    with sqlite3.connect(db_with_instruments) as conn:
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO dividend_data
+            (isin, yield_bps, frequency, last_amount_micro,
+             last_ex_date, currency, payout_ratio_bps,
+             skip_until, data_source, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                # Realty Income — aktiv, monatlich
+                ("US7561091049", 550, "monthly", 271_000,
+                 "2026-03-31", "USD", 27_500,
+                 None, "yfinance", old_timestamp),
+
+                # Tesla — skip_until in Zukunft (18-Monats-Regel ausgelöst)
+                ("US88160R1014", 0, None, None,
+                 None, "USD", None,
+                 future_skip, "yfinance", old_timestamp),
+
+                # Deutsche Telekom — aktiv, jährlich, höherer Yield
+                ("DE0005557508", 800, "annual", 200_000,
+                 "2026-02-15", "EUR", 60_000,
+                 None, "yfinance", old_timestamp),
+            ],
         )
         conn.commit()
     return db_with_instruments
