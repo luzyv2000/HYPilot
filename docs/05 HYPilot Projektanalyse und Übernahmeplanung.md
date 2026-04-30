@@ -1,3 +1,7 @@
+<div>
+
+<div>
+
 [HYPilot](https://claude.ai/project/019da6d6-17ff-747a-8937-572a6ad21845)/
 
 ## Du hast gesagt: Analysiere die beiden in den Projektdateien vorliegenden Chats im md-Format kritisch und Schritt für Schritt.
@@ -19199,4 +19203,6 @@ bash
 -   🔜 Nächster Schritt: *dateutil* testen, dann offene Punkte P6/P7
     (PyMuPDF, Selenium) klären
 
+</div>
 
+</div>
