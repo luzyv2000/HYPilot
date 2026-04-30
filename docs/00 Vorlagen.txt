@@ -8,6 +8,14 @@ Bitte prüfe den Link, starte eine kritische Analyse und teile mir die eigene, u
 
 ==============================================
 
+Analysiere den in den Projektdateien vorliegenden Chat "08 HYPilot Projektanalyse und Testfortschritt.md" kritisch und Schritt für Schritt, den dieser Chat fortsetzen soll. Analysiere die bisherige Herangehensweise und plane die Fortsetzung. Eventuell benötigte py-Dateien sind im Projektwissen hinterlegt, ansonsten fordere sie an.
+
+Lass dir so viel Zeit wie du benötigst, und verteile deine Antwort, wenn du sie aufgrund von Limits nicht auf einmal liefern kannst, auf so viele durchnummerierte Mitteilungen wie nötig.
+
+Hast du dazu noch Fragen, Hinweise oder Vorschläge?
+
+==============================================
+
 cd /home/luzy/workspace/openclaw-min
 source venv/bin/activate
 
@@ -22,16 +30,4 @@ git commit -m "fix: KOMMENTAR"
 git push
 
 ==============================================
-
-# Zuerst unresolvable-Einträge aus den Testläufen bereinigen, damit der Import sauber startet:
-
-cd /home/luzy/workspace/openclaw-min
-source venv/bin/activate
-
-sqlite3 /home/luzy/workspace/openclaw-min/db/hypilot.db \
-  "DELETE FROM ticker_mapping WHERE source = 'unresolvable';"
-
-# Dann Testlauf mit 200 ISINs (dauert ~3 Minuten ohne API-Key):
-python -m ingestion.bulk_ticker_import --missing-only --limit 200
-
 
