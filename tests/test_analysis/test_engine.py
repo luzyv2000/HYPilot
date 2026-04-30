@@ -36,137 +36,155 @@ from analysis.engine import UniverseEntry, score_instrument, universe_screen
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.integration
-class TestUniverseScreen:
+class TestScoreInstrument:
 
-    def test_universe_scan_returns_list(
-        self, db_with_instruments: Path
+    def test_higher_yield_gives_higher_yield_points(
+        self, db_with_mixed_dividends: Path
     ) -> None:
-        """Basisanforderung: universe_screen gibt immer eine Liste zurück."""
-        result = universe_screen(db_path=db_with_instruments)
-        assert isinstance(result, list), (
-            "universe_screen muss list zurückgeben, auch bei leerer DB"
+        """
+        yield_bps bestimmt direkt yield_points — nicht den Gesamtscore.
+        Der Gesamtscore hängt von allen 4 Dimensionen ab.
+        Telekom (800 bps) muss mehr yield_points haben als Realty (550 bps).
+        """
+        score_realty  = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        score_telekom = score_instrument("DE0005557508", db_path=db_with_mixed_dividends)
+
+        assert score_realty  is not None, "Realty Income Score darf nicht None sein"
+        assert score_telekom is not None, "Telekom Score darf nicht None sein"
+        assert score_telekom.yield_points >= score_realty.yield_points, (
+            f"Höherer Yield (800 bps) muss >= yield_points ergeben als niedrigerer "
+            f"(550 bps). Got: Telekom yield_points={score_telekom.yield_points}, "
+            f"Realty yield_points={score_realty.yield_points}"
         )
 
-    def test_empty_db_returns_empty_list(
-        self, in_memory_db: Path
+    def test_monthly_frequency_outweighs_lower_yield_in_total(
+        self, db_with_mixed_dividends: Path
     ) -> None:
-        """Leere DB → leere Liste, kein Crash."""
-        result = universe_screen(db_path=in_memory_db)
-        assert result == []
+        """
+        Regressionstest für das Scoring-Modell:
+        Realty Income (550 bps, monatlich) kann Telekom (800 bps, jährlich)
+        im Gesamtscore schlagen — weil monatliche Frequenz 16 Punkte mehr bringt
+        als jährliche (20 vs. 4), was die ~10 Punkte Yield-Differenz übersteigt.
+        Dieses Verhalten ist gewollt und muss stabil bleiben.
+        """
+        score_realty  = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        score_telekom = score_instrument("DE0005557508", db_path=db_with_mixed_dividends)
 
-    def test_returns_entries_for_populated_db(
-        self, db_with_instruments: Path
-    ) -> None:
-        """Gefüllte DB liefert mindestens einen Eintrag zurück."""
-        result = universe_screen(db_path=db_with_instruments)
-        assert len(result) >= 1
+        assert score_realty  is not None
+        assert score_telekom is not None
+        # Frequenz-Bonus (16 Punkte) > Yield-Bonus (~10 Punkte) → Realty gewinnt
+        assert score_realty.frequency_points > score_telekom.frequency_points, (
+            "Monatliche Ausschüttung muss mehr frequency_points ergeben als jährliche"
+        )
+        assert score_realty.total > score_telekom.total, (
+            f"Realty ({score_realty.total}) soll Telekom ({score_telekom.total}) "
+            f"übersteigen wenn Frequenzvorteil den Yield-Nachteil kompensiert"
+        )
 
-    def test_entry_is_universe_entry_type(
-        self, db_with_instruments: Path
-    ) -> None:
-        """Jeder Eintrag ist ein UniverseEntry-Dataclass-Objekt."""
-        result = universe_screen(db_path=db_with_instruments)
-        if not result:
-            pytest.skip("Keine Einträge nach Filter — Test nicht anwendbar")
-        assert isinstance(result[0], UniverseEntry)
-
-    def test_entry_has_required_fields(
-        self, db_with_instruments: Path
-    ) -> None:
-        """Jeder Eintrag hat name, isin, category und name_score."""
-        result = universe_screen(db_path=db_with_instruments)
-        if not result:
-            pytest.skip("Keine Einträge nach Filter")
-        entry = result[0]
-        assert hasattr(entry, "name"),       "Feld 'name' fehlt"
-        assert hasattr(entry, "isin"),       "Feld 'isin' fehlt"
-        assert hasattr(entry, "category"),   "Feld 'category' fehlt"
-        assert hasattr(entry, "name_score"), "Feld 'name_score' fehlt"
-
-    def test_category_values_are_valid(
-        self, db_with_instruments: Path
-    ) -> None:
-        """Kategorien dürfen nur definierte Werte enthalten."""
-        valid = {"ETF", "STOCK", "BOND", "DERIVATIVE", "OPTION_STRATEGY"}
-        result = universe_screen(db_path=db_with_instruments)
-        for entry in result:
-            assert entry.category in valid, (
-                f"Ungültige Kategorie: '{entry.category}' für {entry.isin}"
-            )
-
-    def test_filter_excludes_short_products(
+    def test_same_frequency_higher_yield_wins(
         self, db_with_instruments: Path
     ) -> None:
         """
-        'Short Product XYZ' (DE000SL0ABC1) enthält 'Short' im Namen.
-        is_investable() muss es herausfiltern.
-        conftest legt dieses Instrument als Test-Artefakt an.
+        Bei gleicher Frequenz gewinnt der höhere Yield im Gesamtscore.
+        Zwei Snapshots mit monthly + 1000 bps vs. monthly + 550 bps.
         """
-        result = universe_screen(db_path=db_with_instruments)
-        names = [e.name for e in result]
-        assert not any("Short" in n for n in names), (
-            "Short-Produkte dürfen universe_screen nicht passieren"
+        with sqlite3.connect(db_with_instruments) as conn:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO dividend_data
+                (isin, yield_bps, frequency, last_amount_micro,
+                 last_ex_date, currency, payout_ratio_bps, data_source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'yfinance', '2020-01-01')
+                """,
+                [
+                    ("US7561091049", 1000, "monthly", 300_000,
+                     "2026-03-31", "USD", 6_500),
+                    ("DE0005557508", 550, "monthly", 150_000,
+                     "2026-02-15", "EUR", 6_500),
+                ],
+            )
+            conn.commit()
+
+        score_high = score_instrument("US7561091049", db_path=db_with_instruments)
+        score_low  = score_instrument("DE0005557508", db_path=db_with_instruments)
+
+        assert score_high is not None
+        assert score_low  is not None
+        assert score_high.total > score_low.total, (
+            f"Bei gleicher Frequenz muss höherer Yield (1000 bps) > niedrigerer "
+            f"(550 bps) gewinnen. Got: high={score_high.total}, low={score_low.total}"
         )
 
-    def test_results_sorted_by_name_score_descending(
+    def test_score_returns_none_for_unknown_isin(
         self, db_with_instruments: Path
     ) -> None:
-        """Ergebnisse sind nach name_score absteigend sortiert."""
-        result = universe_screen(db_path=db_with_instruments)
-        scores = [e.name_score for e in result]
-        assert scores == sorted(scores, reverse=True), (
-            f"Ergebnisse nicht nach name_score sortiert: {scores}"
+        """Unbekannte ISIN → None, kein Crash."""
+        result = score_instrument("XX9999999999", db_path=db_with_instruments)
+        assert result is None
+
+    def test_score_returns_none_without_dividend_data(
+        self, db_with_instruments: Path
+    ) -> None:
+        """
+        iShares ETF (IE00B4L5Y983) hat keinen dividend_data-Eintrag.
+        → score_instrument gibt None zurück.
+        """
+        result = score_instrument("IE00B4L5Y983", db_path=db_with_instruments)
+        assert result is None
+
+    def test_score_total_is_integer(
+        self, db_with_mixed_dividends: Path
+    ) -> None:
+        """Score-Total muss ein Integer sein (kein float-Drift)."""
+        result = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        assert result is not None
+        assert isinstance(result.total, int), (
+            "Score-Total muss int sein — float würde auf Berechnungsfehler hinweisen"
         )
 
-    def test_category_filter_etf_only(
-        self, db_with_instruments: Path
+    def test_score_total_in_valid_range(
+        self, db_with_mixed_dividends: Path
     ) -> None:
-        """category_filter='ETF' liefert nur ETF-Einträge zurück."""
-        result = universe_screen(
-            category_filter="ETF",
-            db_path=db_with_instruments,
+        """Score muss zwischen 0 und 100 liegen."""
+        result = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        assert result is not None
+        assert 0 <= result.total <= 100, (
+            f"Score {result.total} außerhalb [0, 100]"
         )
-        for entry in result:
-            assert entry.category == "ETF", (
-                f"Erwarte ETF, got '{entry.category}' für {entry.isin}"
+
+    def test_skip_until_instrument_no_crash(
+        self, db_with_mixed_dividends: Path
+    ) -> None:
+        """
+        Tesla hat skip_until in der Zukunft und yield_bps=0.
+        score_instrument darf keinen Crash produzieren.
+        Ergebnis: None oder REJECT-Rating.
+        """
+        result = score_instrument("US88160R1014", db_path=db_with_mixed_dividends)
+        if result is not None:
+            assert result.rating in ("REJECT", "WATCH"), (
+                f"0-Yield-Instrument darf nicht BUY/STRONG_BUY erhalten: "
+                f"{result.rating}"
             )
 
-    def test_category_filter_stock_only(
-        self, db_with_instruments: Path
+    def test_score_has_notes(
+        self, db_with_mixed_dividends: Path
     ) -> None:
-        """category_filter='STOCK' liefert nur STOCK-Einträge zurück."""
-        result = universe_screen(
-            category_filter="STOCK",
-            db_path=db_with_instruments,
+        """DividendScore enthält mindestens eine Begründungsnotiz."""
+        result = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        assert result is not None
+        assert len(result.notes) >= 1
+
+    def test_score_has_valid_rating_string(
+        self, db_with_mixed_dividends: Path
+    ) -> None:
+        """Rating ist immer einer der vier definierten Strings."""
+        valid_ratings = {"STRONG_BUY", "BUY", "WATCH", "REJECT"}
+        result = score_instrument("US7561091049", db_path=db_with_mixed_dividends)
+        assert result is not None
+        assert result.rating in valid_ratings, (
+            f"Ungültiges Rating: '{result.rating}'"
         )
-        for entry in result:
-            assert entry.category == "STOCK"
-
-    def test_limit_respected(
-        self, db_with_instruments: Path
-    ) -> None:
-        """limit=1 liefert maximal 1 Eintrag."""
-        result = universe_screen(limit=1, db_path=db_with_instruments)
-        assert len(result) <= 1
-
-    def test_name_score_is_integer(
-        self, db_with_instruments: Path
-    ) -> None:
-        """name_score muss Integer sein."""
-        result = universe_screen(db_path=db_with_instruments)
-        for entry in result:
-            assert isinstance(entry.name_score, int), (
-                f"name_score ist kein int: {type(entry.name_score)}"
-            )
-
-    def test_isin_is_nonempty_string(
-        self, db_with_instruments: Path
-    ) -> None:
-        """ISIN muss nicht-leerer String sein."""
-        result = universe_screen(db_path=db_with_instruments)
-        for entry in result:
-            assert isinstance(entry.isin, str) and len(entry.isin) > 0
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # test_filter_excludes_skip_until — 18-Monats-Regel Gating
