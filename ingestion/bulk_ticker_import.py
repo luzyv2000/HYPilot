@@ -406,7 +406,7 @@ def main() -> int:
         logger.info("%d ISINs gesamt.", len(isins))
 
         if args.limit:
-        isins = isins[: args.limit]
+            isins = isins[: args.limit]
         logger.info("Limitiert auf %d ISINs.", len(isins))
 
     total = len(isins)  # ← NEUE ZEILE HINZUFÜGEN!
