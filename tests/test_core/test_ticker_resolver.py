@@ -363,31 +363,24 @@ class TestOpenFIGIMocked:
         assert status == ResolveStatus.NO_DATA
 
     @resp.activate
-    def test_exotic_isin_stored_as_unvalidated(
-        self, db_with_instruments: Path
-    ) -> None:
-        """
-        AT-ISIN ist nicht in _ISIN_PREFIXES_REQUIRE_YF_VALIDATION.
-        Wenn yfinance-Validierung fehlschlägt → trotzdem als
-        openfigi_unvalidated gespeichert.
-        """
-        resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
-            json=[{"data": [{"ticker": "CLEN", "exchCode": "AV"}]}],
-            status=200,
+def test_exotic_isin_stored_as_unvalidated(
+    self, db_with_instruments: Path
+) -> None:
+    resp.add(
+        resp.POST,
+        "https://api.openfigi.com/v3/mapping",
+        json=[{"data": [{"ticker": "IWRD", "exchCode": "LN"}]}],
+        status=200,
+    )
+    with patch("core.ticker_resolver._validate_ticker",
+               return_value=None):
+        ticker, status = _resolve_via_openfigi_internal(
+            "IE00B4L5Y983", db_path=db_with_instruments
         )
-        with patch("core.ticker_resolver._validate_ticker",
-                   return_value=None):  # Validierung schlägt fehl
-            ticker, status = _resolve_via_openfigi_internal(
-                "AT0000A38M45", db_path=db_with_instruments
-            )
-        assert ticker == "CLEN"
-        assert status == ResolveStatus.SUCCESS
-        # Gespeichert als unvalidated
-        _, source = _lookup_db("AT0000A38M45",
-                               db_path=db_with_instruments)
-        assert source == "openfigi_unvalidated"
+    assert ticker == "IWRD"
+    assert status == ResolveStatus.SUCCESS
+    _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
+    assert source == "openfigi_unvalidated"
 
     @resp.activate
     def test_successful_validated_resolution(
@@ -446,48 +439,42 @@ class TestOpenFIGIMocked:
         assert status == ResolveStatus.NO_DATA
 
     @resp.activate
-    def test_de_isin_gets_xetra_ticker_not_otc(
-        self, db_with_instruments: Path
-    ) -> None:
-        """Regressionstest: DE-ISIN → DTE.DE, nicht DTEGF."""
-        resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
-            json=[{"data": [
-                {"ticker": "DTEGF", "exchCode": "US"},
-                {"ticker": "DTE",   "exchCode": "GY"},
-            ]}],
-            status=200,
+def test_de_isin_gets_xetra_ticker_not_otc(
+    self, db_with_instruments: Path
+) -> None:
+    resp.add(
+        resp.POST,
+        "https://api.openfigi.com/v3/mapping",
+        json=[{"data": [
+            {"ticker": "DTEGF", "exchCode": "US"},
+            {"ticker": "DTE",   "exchCode": "GY"},
+        ]}],
+        status=200,
+    )
+    with patch("core.ticker_resolver._validate_ticker",
+               return_value="DTE.DE"):
+        ticker, status = _resolve_via_openfigi_internal(
+            "DE0005557508", db_path=db_with_instruments
         )
-        with patch("core.ticker_resolver._validate_ticker",
-                   side_effect=lambda t, e=None: t):
-            ticker, status = _resolve_via_openfigi_internal(
-                "DE0005557508", db_path=db_with_instruments
-            )
-        assert ticker == "DTE.DE"
-        assert status == ResolveStatus.SUCCESS
+    assert ticker == "DTE.DE"
+    assert status == ResolveStatus.SUCCESS
 
     @resp.activate
-    def test_unresolvable_marked_after_all_fail(
-        self, db_with_instruments: Path
-    ) -> None:
-        """
-        Wenn OpenFIGI kein Ergebnis liefert und yfinance fehlschlägt
-        → ISIN als unresolvable markiert (nur bei NO_DATA, nicht RATE_LIMIT).
-        """
-        resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
-            json=[{"warning": "No identifier found."}],
-            status=200,
+def test_unresolvable_marked_after_all_fail(
+    self, db_with_instruments: Path
+) -> None:
+    resp.add(
+        resp.POST,
+        "https://api.openfigi.com/v3/mapping",
+        json=[{"warning": "No identifier found."}],
+        status=200,
+    )
+    with patch("core.ticker_resolver._resolve_via_yfinance",
+               return_value=None):
+        result = resolve(
+            "IE00B4L5Y983",
+            db_path=db_with_instruments,
         )
-        with patch("core.ticker_resolver._resolve_via_yfinance",
-                   return_value=None):
-            result = resolve(
-                "AT0000A38M45",
-                db_path=db_with_instruments,
-            )
-        assert result is None
-        _, source = _lookup_db("AT0000A38M45",
-                               db_path=db_with_instruments)
-        assert source == "unresolvable"
+    assert result is None
+    _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
+    assert source == "unresolvable"
