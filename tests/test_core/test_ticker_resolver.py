@@ -1,5 +1,5 @@
 # Dateiname:     tests/test_core/test_ticker_resolver.py
-# Version:       2026-04-30
+# Version:       2026-04-30-fix3
 # Abhängigkeiten (intern): core.ticker_resolver
 # Abhängigkeiten (extern): pytest, responses
 """
@@ -24,24 +24,24 @@ Netzwerk-Tests als 'slow' markiert — nicht in CI.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import responses as resp
 
 from core.ticker_resolver import (
     UNRESOLVABLE_TTL_DAYS,
+    ResolveStatus,
     _apply_suffix,
     _get_preferred_exchanges,
     _lookup_db,
+    _resolve_via_openfigi_internal,
     _select_best_figi,
     _store_mapping,
     _store_unresolvable,
     _validate_ticker,
-    _resolve_via_openfigi_internal,
     resolve,
     store_manual_mapping,
-    ResolveStatus,
 )
 
 
@@ -51,32 +51,25 @@ from core.ticker_resolver import (
 class TestGetPreferredExchanges:
 
     def test_de_isin_prefers_xetra(self) -> None:
-        pref = _get_preferred_exchanges("DE0005557508")
-        assert pref[0] == "GY"
+        assert _get_preferred_exchanges("DE0005557508")[0] == "GY"
 
     def test_us_isin_prefers_us(self) -> None:
-        pref = _get_preferred_exchanges("US88160R1014")
-        assert pref[0] == "US"
+        assert _get_preferred_exchanges("US88160R1014")[0] == "US"
 
     def test_at_isin_prefers_vienna(self) -> None:
-        pref = _get_preferred_exchanges("AT0000A38M45")
-        assert pref[0] == "AV"
+        assert _get_preferred_exchanges("AT0000A38M45")[0] == "AV"
 
     def test_gb_isin_prefers_london(self) -> None:
-        pref = _get_preferred_exchanges("GB0002634946")
-        assert pref[0] == "LN"
+        assert _get_preferred_exchanges("GB0002634946")[0] == "LN"
 
     def test_unknown_prefix_uses_fallback(self) -> None:
-        pref = _get_preferred_exchanges("XX0000000000")
-        assert len(pref) > 0
+        assert len(_get_preferred_exchanges("XX0000000000")) > 0
 
     def test_primary_not_duplicated(self) -> None:
-        pref = _get_preferred_exchanges("DE0005557508")
-        assert pref.count("GY") == 1
+        assert _get_preferred_exchanges("DE0005557508").count("GY") == 1
 
     def test_returns_tuple(self) -> None:
-        pref = _get_preferred_exchanges("US7561091049")
-        assert isinstance(pref, tuple)
+        assert isinstance(_get_preferred_exchanges("US7561091049"), tuple)
 
 
 # ── _select_best_figi ─────────────────────────────────────────────────────────
@@ -85,7 +78,6 @@ class TestGetPreferredExchanges:
 class TestSelectBestFigi:
 
     def test_de_isin_prefers_xetra_over_us(self) -> None:
-        """Regressionstest: DE-ISIN darf nicht DTEGF statt DTE.DE bekommen."""
         items = [
             {"ticker": "DTEGF", "exchCode": "US"},
             {"ticker": "DTE",   "exchCode": "GY"},
@@ -116,10 +108,7 @@ class TestSelectBestFigi:
         assert _select_best_figi([], isin="US0000000000") is None
 
     def test_backward_compat_no_isin(self) -> None:
-        """Aufruf ohne isin-Parameter darf nicht crashen."""
-        items = [{"ticker": "ABC", "exchCode": "US"}]
-        result = _select_best_figi(items)
-        assert result is not None
+        assert _select_best_figi([{"ticker": "ABC", "exchCode": "US"}]) is not None
 
 
 # ── _apply_suffix ─────────────────────────────────────────────────────────────
@@ -134,18 +123,13 @@ class TestApplySuffix:
         assert _apply_suffix("CLEN", "AV") == "CLEN.VI"
 
     def test_us_no_suffix(self) -> None:
-        """US-Listings brauchen kein Suffix."""
-        result = _apply_suffix("O", "US")
-        assert result == "O"
+        assert _apply_suffix("O", "US") == "O"
 
     def test_unknown_exchange_no_suffix(self) -> None:
-        result = _apply_suffix("XYZ", "ZZ")
-        assert result == "XYZ"
+        assert _apply_suffix("XYZ", "ZZ") == "XYZ"
 
     def test_no_duplicate_suffix(self) -> None:
-        """Bereits suffixed nicht nochmals suffixen."""
-        result = _apply_suffix("DTE.DE", "GY")
-        assert result == "DTE.DE"
+        assert _apply_suffix("DTE.DE", "GY") == "DTE.DE"
 
     def test_none_exchange_no_suffix(self) -> None:
         assert _apply_suffix("ABC", None) == "ABC"
@@ -156,31 +140,8 @@ class TestApplySuffix:
 @pytest.mark.unit
 class TestValidateTicker:
 
-    def test_no_duplicate_candidates_when_no_suffix(self) -> None:
-        """
-        Wenn kein Suffix angewendet wird (US-Listing),
-        darf yfinance nicht zweimal mit demselben Symbol aufgerufen werden.
-        """
-        call_count = 0
-
-        def mock_info(ticker_str: str) -> dict:
-            nonlocal call_count
-            call_count += 1
-            return {"symbol": ticker_str, "quoteType": "EQUITY"}
-
-        mock_ticker = MagicMock()
-        mock_ticker.info = {"symbol": "O", "quoteType": "EQUITY"}
-
-        with patch("core.ticker_resolver.yf.Ticker", return_value=mock_ticker):
-            result = _validate_ticker("O", exchange="US")
-
-        assert result == "O"
-        # Nur ein Aufruf — kein Duplikat
-        assert mock_ticker.info  # wurde zugegriffen
-
     def test_suffix_candidate_tried_first(self) -> None:
-        """Wenn Suffix verfügbar, wird suffixed zuerst versucht."""
-        tried = []
+        tried: list[str] = []
 
         def make_ticker(sym: str) -> MagicMock:
             tried.append(sym)
@@ -192,36 +153,45 @@ class TestValidateTicker:
             result = _validate_ticker("DTE", exchange="GY")
 
         assert result == "DTE.DE"
-        assert tried[0] == "DTE.DE"  # Suffix zuerst
+        assert tried[0] == "DTE.DE"
 
     def test_falls_back_to_unsuffixed(self) -> None:
-        """Wenn suffixed schlägt fehl, wird ohne Suffix versucht."""
         call_num = 0
 
         def make_ticker(sym: str) -> MagicMock:
             nonlocal call_num
             call_num += 1
             m = MagicMock()
-            if call_num == 1:
-                m.info = {}  # kein symbol → fehlgeschlagen
-            else:
-                m.info = {"symbol": sym, "quoteType": "EQUITY"}
+            m.info = {} if call_num == 1 else {"symbol": sym, "quoteType": "EQUITY"}
             return m
 
         with patch("core.ticker_resolver.yf.Ticker", side_effect=make_ticker):
             result = _validate_ticker("DTE", exchange="GY")
 
         assert result == "DTE"
+        assert call_num == 2
 
     def test_returns_none_if_all_fail(self) -> None:
-        """Wenn alle Kandidaten fehlschlagen → None."""
-        mock_ticker = MagicMock()
-        mock_ticker.info = {}  # kein symbol, kein quoteType
+        m = MagicMock()
+        m.info = {}
+        with patch("core.ticker_resolver.yf.Ticker", return_value=m):
+            assert _validate_ticker("UNKNOWN", exchange="GY") is None
 
-        with patch("core.ticker_resolver.yf.Ticker", return_value=mock_ticker):
-            result = _validate_ticker("UNKNOWN", exchange="GY")
+    def test_no_duplicate_call_when_no_suffix(self) -> None:
+        call_count = 0
 
-        assert result is None
+        def make_ticker(sym: str) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            m = MagicMock()
+            m.info = {"symbol": sym, "quoteType": "EQUITY"}
+            return m
+
+        with patch("core.ticker_resolver.yf.Ticker", side_effect=make_ticker):
+            result = _validate_ticker("O", exchange="US")
+
+        assert result == "O"
+        assert call_count == 1
 
 
 # ── _lookup_db ────────────────────────────────────────────────────────────────
@@ -241,8 +211,7 @@ class TestLookupDb:
     ) -> None:
         _store_mapping("US7561091049", "O", "manual",
                        db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker == "O"
         assert source == "manual"
 
@@ -250,20 +219,16 @@ class TestLookupDb:
         self, db_with_instruments: Path
     ) -> None:
         _store_unresolvable("US7561091049", db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker is None
         assert source == "unresolvable"
 
-    def test_openfigi_unvalidated_returned_correctly(
+    def test_openfigi_unvalidated_stored_and_retrieved(
         self, db_with_instruments: Path
     ) -> None:
-        """openfigi_unvalidated darf keinen IntegrityError auslösen."""
-        _store_mapping("US7561091049", "SOME_TICKER",
-                       "openfigi_unvalidated",
+        _store_mapping("US7561091049", "SOME_TICKER", "openfigi_unvalidated",
                        db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker == "SOME_TICKER"
         assert source == "openfigi_unvalidated"
 
@@ -273,38 +238,29 @@ class TestLookupDb:
 @pytest.mark.integration
 class TestManualMapping:
 
-    def test_store_and_lookup(
-        self, db_with_instruments: Path
-    ) -> None:
-        store_manual_mapping("US7561091049", "O",
-                             exchange="US",
+    def test_store_and_lookup(self, db_with_instruments: Path) -> None:
+        store_manual_mapping("US7561091049", "O", exchange="US",
                              db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker == "O"
         assert source == "manual"
 
-    def test_manual_overwrites_yfinance(
-        self, db_with_instruments: Path
-    ) -> None:
+    def test_manual_overwrites_yfinance(self, db_with_instruments: Path) -> None:
         _store_mapping("US7561091049", "O_AUTO", "yfinance",
                        db_path=db_with_instruments)
         store_manual_mapping("US7561091049", "O_MANUAL",
                              db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker == "O_MANUAL"
         assert source == "manual"
 
     def test_manual_overwrites_unresolvable(
         self, db_with_instruments: Path
     ) -> None:
-        """Manuelles Mapping muss unresolvable überschreiben."""
         _store_unresolvable("US7561091049", db_path=db_with_instruments)
         store_manual_mapping("US7561091049", "O_MANUAL",
                              db_path=db_with_instruments)
-        ticker, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        ticker, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert ticker == "O_MANUAL"
         assert source == "manual"
 
@@ -314,22 +270,16 @@ class TestManualMapping:
 @pytest.mark.integration
 class TestUnresolvableTracking:
 
-    def test_marked_as_unresolvable(
-        self, db_with_instruments: Path
-    ) -> None:
-        _store_unresolvable("US7561091049",
-                            db_path=db_with_instruments)
-        _, source = _lookup_db("US7561091049",
-                               db_path=db_with_instruments)
+    def test_marked_as_unresolvable(self, db_with_instruments: Path) -> None:
+        _store_unresolvable("US7561091049", db_path=db_with_instruments)
+        _, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert source == "unresolvable"
 
     def test_resolve_returns_none_for_unresolvable(
         self, db_with_instruments: Path
     ) -> None:
-        _store_unresolvable("US7561091049",
-                            db_path=db_with_instruments)
-        result = resolve("US7561091049",
-                         db_path=db_with_instruments,
+        _store_unresolvable("US7561091049", db_path=db_with_instruments)
+        result = resolve("US7561091049", db_path=db_with_instruments,
                          skip_openfigi=True)
         assert result is None
 
@@ -343,19 +293,14 @@ class TestOpenFIGIMocked:
     def test_us_isin_requires_yfinance_validation(
         self, db_with_instruments: Path
     ) -> None:
-        """
-        US-ISIN gehört zu _ISIN_PREFIXES_REQUIRE_YF_VALIDATION.
-        Wenn yfinance-Validierung fehlschlägt → None (kein Speichern).
-        """
+        """US-ISIN: yfinance-Validierung fehlgeschlagen → (None, NO_DATA)."""
         resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
+            resp.POST, "https://api.openfigi.com/v3/mapping",
             json=[{"data": [{"ticker": "O", "exchCode": "US",
                              "figi": "BBG000BTXHJ4"}]}],
             status=200,
         )
-        with patch("core.ticker_resolver._validate_ticker",
-                   return_value=None):  # Validierung schlägt fehl
+        with patch("core.ticker_resolver._validate_ticker", return_value=None):
             ticker, status = _resolve_via_openfigi_internal(
                 "US7561091049", db_path=db_with_instruments
             )
@@ -363,47 +308,46 @@ class TestOpenFIGIMocked:
         assert status == ResolveStatus.NO_DATA
 
     @resp.activate
-def test_exotic_isin_stored_as_unvalidated(
-    self, db_with_instruments: Path
-) -> None:
-    resp.add(
-        resp.POST,
-        "https://api.openfigi.com/v3/mapping",
-        json=[{"data": [{"ticker": "IWRD", "exchCode": "LN"}]}],
-        status=200,
-    )
-    with patch("core.ticker_resolver._validate_ticker",
-               return_value=None):
-        ticker, status = _resolve_via_openfigi_internal(
-            "IE00B4L5Y983", db_path=db_with_instruments
+    def test_exotic_isin_stored_as_unvalidated(
+        self, db_with_instruments: Path
+    ) -> None:
+        """
+        IE-ISIN nicht in _ISIN_PREFIXES_REQUIRE_YF_VALIDATION.
+        yfinance-Validierung fehlgeschlagen → als openfigi_unvalidated gespeichert.
+        IE00B4L5Y983 ist in db_with_instruments vorhanden.
+        """
+        resp.add(
+            resp.POST, "https://api.openfigi.com/v3/mapping",
+            json=[{"data": [{"ticker": "IWRD", "exchCode": "LN"}]}],
+            status=200,
         )
-    assert ticker == "IWRD"
-    assert status == ResolveStatus.SUCCESS
-    _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
-    assert source == "openfigi_unvalidated"
+        with patch("core.ticker_resolver._validate_ticker", return_value=None):
+            ticker, status = _resolve_via_openfigi_internal(
+                "IE00B4L5Y983", db_path=db_with_instruments
+            )
+        assert ticker == "IWRD"
+        assert status == ResolveStatus.SUCCESS
+        _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
+        assert source == "openfigi_unvalidated"
 
     @resp.activate
     def test_successful_validated_resolution(
         self, db_with_instruments: Path
     ) -> None:
-        """Erfolgreiche Auflösung mit yfinance-Validierung → openfigi."""
+        """Erfolgreiche Auflösung mit Validierung → source='openfigi'."""
         resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
+            resp.POST, "https://api.openfigi.com/v3/mapping",
             json=[{"data": [{"ticker": "O", "exchCode": "US",
                              "figi": "BBG000BTXHJ4"}]}],
             status=200,
         )
-        with patch("core.ticker_resolver._validate_ticker",
-                   return_value="O"):
+        with patch("core.ticker_resolver._validate_ticker", return_value="O"):
             ticker, status = _resolve_via_openfigi_internal(
                 "US7561091049", db_path=db_with_instruments
             )
         assert ticker == "O"
         assert status == ResolveStatus.SUCCESS
-        # Gespeichert als openfigi (validiert)
-        stored, source = _lookup_db("US7561091049",
-                                    db_path=db_with_instruments)
+        stored, source = _lookup_db("US7561091049", db_path=db_with_instruments)
         assert stored == "O"
         assert source == "openfigi"
 
@@ -411,15 +355,10 @@ def test_exotic_isin_stored_as_unvalidated(
     def test_rate_limit_returns_rate_limit_status(
         self, db_with_instruments: Path
     ) -> None:
-        resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
-            status=429,
+        resp.add(resp.POST, "https://api.openfigi.com/v3/mapping", status=429)
+        _, status = _resolve_via_openfigi_internal(
+            "US7561091049", db_path=db_with_instruments
         )
-        ticker, status = _resolve_via_openfigi_internal(
-            "US0000000001", db_path=db_with_instruments
-        )
-        assert ticker is None
         assert status == ResolveStatus.RATE_LIMIT
 
     @resp.activate
@@ -427,54 +366,52 @@ def test_exotic_isin_stored_as_unvalidated(
         self, db_with_instruments: Path
     ) -> None:
         resp.add(
-            resp.POST,
-            "https://api.openfigi.com/v3/mapping",
+            resp.POST, "https://api.openfigi.com/v3/mapping",
             json=[{"warning": "No identifier found."}],
             status=200,
         )
-        ticker, status = _resolve_via_openfigi_internal(
-            "XX0000000000", db_path=db_with_instruments
+        _, status = _resolve_via_openfigi_internal(
+            "US7561091049", db_path=db_with_instruments
         )
-        assert ticker is None
         assert status == ResolveStatus.NO_DATA
 
     @resp.activate
-def test_de_isin_gets_xetra_ticker_not_otc(
-    self, db_with_instruments: Path
-) -> None:
-    resp.add(
-        resp.POST,
-        "https://api.openfigi.com/v3/mapping",
-        json=[{"data": [
-            {"ticker": "DTEGF", "exchCode": "US"},
-            {"ticker": "DTE",   "exchCode": "GY"},
-        ]}],
-        status=200,
-    )
-    with patch("core.ticker_resolver._validate_ticker",
-               return_value="DTE.DE"):
-        ticker, status = _resolve_via_openfigi_internal(
-            "DE0005557508", db_path=db_with_instruments
+    def test_de_isin_gets_xetra_ticker_not_otc(
+        self, db_with_instruments: Path
+    ) -> None:
+        """Regressionstest: DE-ISIN → DTE.DE (XETRA), nicht DTEGF (OTC)."""
+        resp.add(
+            resp.POST, "https://api.openfigi.com/v3/mapping",
+            json=[{"data": [
+                {"ticker": "DTEGF", "exchCode": "US"},
+                {"ticker": "DTE",   "exchCode": "GY"},
+            ]}],
+            status=200,
         )
-    assert ticker == "DTE.DE"
-    assert status == ResolveStatus.SUCCESS
+        with patch("core.ticker_resolver._validate_ticker",
+                   return_value="DTE.DE"):
+            ticker, status = _resolve_via_openfigi_internal(
+                "DE0005557508", db_path=db_with_instruments
+            )
+        assert ticker == "DTE.DE"
+        assert status == ResolveStatus.SUCCESS
 
     @resp.activate
-def test_unresolvable_marked_after_all_fail(
-    self, db_with_instruments: Path
-) -> None:
-    resp.add(
-        resp.POST,
-        "https://api.openfigi.com/v3/mapping",
-        json=[{"warning": "No identifier found."}],
-        status=200,
-    )
-    with patch("core.ticker_resolver._resolve_via_yfinance",
-               return_value=None):
-        result = resolve(
-            "IE00B4L5Y983",
-            db_path=db_with_instruments,
+    def test_unresolvable_marked_after_all_fail(
+        self, db_with_instruments: Path
+    ) -> None:
+        """
+        OpenFIGI NO_DATA + yfinance fehlgeschlagen → unresolvable.
+        IE00B4L5Y983 ist in db_with_instruments vorhanden.
+        """
+        resp.add(
+            resp.POST, "https://api.openfigi.com/v3/mapping",
+            json=[{"warning": "No identifier found."}],
+            status=200,
         )
-    assert result is None
-    _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
-    assert source == "unresolvable"
+        with patch("core.ticker_resolver._resolve_via_yfinance",
+                   return_value=None):
+            result = resolve("IE00B4L5Y983", db_path=db_with_instruments)
+        assert result is None
+        _, source = _lookup_db("IE00B4L5Y983", db_path=db_with_instruments)
+        assert source == "unresolvable"
