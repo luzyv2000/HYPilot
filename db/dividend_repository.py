@@ -242,20 +242,9 @@ def get_isins_due_for_update(
 ) -> list[str]:
     """
     Gibt ISINs zurück die für ein Update fällig sind:
-      - Noch nie aktualisiert ODER updated_at älter als interval_hours
-      - UND skip_until ist NULL oder bereits vergangen
-
-    Reihenfolge: ISIN-Länderpräfix-Priorität zuerst.
-    US/CA-ISINs haben beste yfinance-Abdeckung → zuerst verarbeiten.
-    Verhindert dass der erste Batch ausschließlich aus AU/AT-Kleinsttiteln
-    besteht.
-
-    Prioritätsstufen (CASE WHEN):
-      1  → US, CA        (beste Abdeckung)
-      2  → DE, GB, FR,
-           CH, NL, SE,
-           DK, FI, NO   (gute europäische Abdeckung)
-      3  → alle anderen  (unsichere Abdeckung)
+    - Noch nie aktualisiert ODER updated_at älter als interval_hours
+    - UND skip_until ist NULL oder bereits vergangen
+    - UND kein unresolvable-Eintrag in ticker_mapping (spart sinnlose Calls)
     """
     cutoff = (
         datetime.now() - timedelta(hours=interval_hours)
@@ -268,22 +257,17 @@ def get_isins_due_for_update(
             SELECT i.isin
             FROM instruments i
             LEFT JOIN dividend_data d ON i.isin = d.isin
+            LEFT JOIN ticker_mapping tm ON i.isin = tm.isin
             WHERE
                 (d.isin IS NULL OR d.updated_at < ?)
                 AND (d.skip_until IS NULL OR d.skip_until <= ?)
+                AND (tm.isin IS NULL OR tm.source != 'unresolvable')
             ORDER BY
                 CASE SUBSTR(i.isin, 1, 2)
-                    WHEN 'US' THEN 1
-                    WHEN 'CA' THEN 1
-                    WHEN 'DE' THEN 2
-                    WHEN 'GB' THEN 2
-                    WHEN 'FR' THEN 2
-                    WHEN 'CH' THEN 2
-                    WHEN 'NL' THEN 2
-                    WHEN 'SE' THEN 2
-                    WHEN 'DK' THEN 2
-                    WHEN 'FI' THEN 2
-                    WHEN 'NO' THEN 2
+                    WHEN 'US' THEN 1 WHEN 'CA' THEN 1
+                    WHEN 'DE' THEN 2 WHEN 'GB' THEN 2
+                    WHEN 'FR' THEN 2 WHEN 'CH' THEN 2
+                    WHEN 'NL' THEN 2 WHEN 'SE' THEN 2
                     ELSE 3
                 END ASC,
                 d.updated_at ASC NULLS FIRST
