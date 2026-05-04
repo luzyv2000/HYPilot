@@ -1,5 +1,5 @@
 # Dateiname:     gui/widgets/instrument_table.py
-# Version:       2026-04-22-A
+# Version:       2026-05-04
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): customtkinter
 """
@@ -12,6 +12,11 @@ Spalten:
   name     — Wertpapiername
   isin_wkn — ISIN und WKN (zwei Zeilen via \\n, rowheight=40)
   div      — Dividendenrendite in %
+  score    — HYPilot-Score (0–100) + Rating-Kürzel
+
+Row-Typ (6 Elemente):
+  (flag, name, isin_wkn, div_display, score_display, isin_raw)
+  isin_raw wird nicht angezeigt, aber als Item-ID genutzt.
 
 Threading:
   Datenladen läuft in threading.Thread.
@@ -32,9 +37,9 @@ import customtkinter as ctk
 
 logger = logging.getLogger(__name__)
 
-# Typ für eine Tabellenzeile: (flag, name, isin_wkn, div_display, isin_raw)
-# isin_raw wird nicht angezeigt, aber für spätere Aktionen benötigt
-Row = tuple[str, str, str, str, str]
+# Typ für eine Tabellenzeile
+# (flag, name, isin_wkn, div_display, score_display, isin_raw)
+Row = tuple[str, str, str, str, str, str]
 
 
 class InstrumentTable(ctk.CTkFrame):
@@ -43,11 +48,12 @@ class InstrumentTable(ctk.CTkFrame):
     und Hintergrund-Datenladen.
     """
 
-    _COL_FLAG = "flag"
-    _COL_NAME = "name"
-    _COL_ISIN = "isin_wkn"
-    _COL_DIV  = "div"
-    _COLUMNS  = (_COL_FLAG, _COL_NAME, _COL_ISIN, _COL_DIV)
+    _COL_FLAG  = "flag"
+    _COL_NAME  = "name"
+    _COL_ISIN  = "isin_wkn"
+    _COL_DIV   = "div"
+    _COL_SCORE = "score"
+    _COLUMNS   = (_COL_FLAG, _COL_NAME, _COL_ISIN, _COL_DIV, _COL_SCORE)
 
     _COL_CONFIG: dict[str, dict[str, Any]] = {
         _COL_FLAG: {
@@ -55,7 +61,7 @@ class InstrumentTable(ctk.CTkFrame):
             "stretch": False, "anchor": "center",
         },
         _COL_NAME: {
-            "heading": "Wertpapier", "width": 420, "minwidth": 160,
+            "heading": "Wertpapier", "width": 380, "minwidth": 160,
             "stretch": True, "anchor": "w",
         },
         _COL_ISIN: {
@@ -64,6 +70,10 @@ class InstrumentTable(ctk.CTkFrame):
         },
         _COL_DIV: {
             "heading": "Div %", "width": 80, "minwidth": 60,
+            "stretch": False, "anchor": "e",
+        },
+        _COL_SCORE: {
+            "heading": "Score", "width": 90, "minwidth": 70,
             "stretch": False, "anchor": "e",
         },
     }
@@ -89,7 +99,6 @@ class InstrumentTable(ctk.CTkFrame):
     def _build(self) -> None:
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
         self._build_search_bar()
         self._build_tree()
         self._apply_treeview_style()
@@ -155,10 +164,7 @@ class InstrumentTable(ctk.CTkFrame):
         self._tree.bind("<Double-1>", self._on_double_click)
 
     def _apply_treeview_style(self) -> None:
-        """
-        Passt Treeview-Farben an CTk-Erscheinungsbild an.
-        Wird beim Start einmalig aufgerufen.
-        """
+        """Passt Treeview-Farben an CTk-Erscheinungsbild an."""
         mode = ctk.get_appearance_mode()
         dark = mode == "Dark"
 
@@ -171,6 +177,12 @@ class InstrumentTable(ctk.CTkFrame):
         even_bg = "#2b2b2b" if dark else "#f0f0f0"
         div_fg  = "#66bb6a" if dark else "#2e7d32"
 
+        # Score-Farben
+        score_sb_fg   = "#66bb6a" if dark else "#1b5e20"   # STRONG_BUY — dunkelgrün
+        score_buy_fg  = "#aed581" if dark else "#558b2f"   # BUY        — hellgrün
+        score_w_fg    = "#ffb74d" if dark else "#e65100"   # WATCH      — orange
+        score_r_fg    = "#ef5350" if dark else "#b71c1c"   # REJECT     — rot
+
         style = ttk.Style()
         try:
             style.theme_use("clam")
@@ -179,19 +191,13 @@ class InstrumentTable(ctk.CTkFrame):
 
         style.configure(
             "HYPilot.Treeview",
-            background=bg,
-            foreground=fg,
-            fieldbackground=bg,
-            borderwidth=0,
-            rowheight=40,
+            background=bg, foreground=fg,
+            fieldbackground=bg, borderwidth=0, rowheight=40,
         )
         style.configure(
             "HYPilot.Treeview.Heading",
-            background=head_bg,
-            foreground=head_fg,
-            relief="flat",
-            borderwidth=1,
-            padding=(4, 4),
+            background=head_bg, foreground=head_fg,
+            relief="flat", borderwidth=1, padding=(4, 4),
         )
         style.map(
             "HYPilot.Treeview",
@@ -200,24 +206,21 @@ class InstrumentTable(ctk.CTkFrame):
         )
 
         self._tree.configure(style="HYPilot.Treeview")
-        self._tree.tag_configure("odd",     background=odd_bg,  foreground=fg)
-        self._tree.tag_configure("even",    background=even_bg, foreground=fg)
-        self._tree.tag_configure("has_div", foreground=div_fg)
+        self._tree.tag_configure("odd",          background=odd_bg,  foreground=fg)
+        self._tree.tag_configure("even",         background=even_bg, foreground=fg)
+        self._tree.tag_configure("has_div",      foreground=div_fg)
+        self._tree.tag_configure("score_sb",     foreground=score_sb_fg)
+        self._tree.tag_configure("score_buy",    foreground=score_buy_fg)
+        self._tree.tag_configure("score_watch",  foreground=score_w_fg)
+        self._tree.tag_configure("score_reject", foreground=score_r_fg)
 
     # ── Datenladen (threadsicher) ─────────────────────────────────────────────
 
     def load_data(self, loader_fn: Callable[[], list[Row]]) -> None:
-        """
-        Startet Datenladen in Hintergrund-Thread.
-
-        Args:
-            loader_fn: Callable ohne Argumente → list[Row]
-        """
+        """Startet Datenladen in Hintergrund-Thread."""
         self._set_status("Lade …")
         threading.Thread(
-            target=self._worker,
-            args=(loader_fn,),
-            daemon=True,
+            target=self._worker, args=(loader_fn,), daemon=True
         ).start()
 
     def _worker(self, loader_fn: Callable[[], list[Row]]) -> None:
@@ -229,10 +232,7 @@ class InstrumentTable(ctk.CTkFrame):
             self._data_queue.put(("error", str(exc)))
 
     def _process_queue(self) -> None:
-        """
-        Verarbeitet Nachrichten aus dem Worker-Thread.
-        Läuft ausschließlich im Hauptthread via self.after().
-        """
+        """Verarbeitet Nachrichten aus dem Worker-Thread (nur Hauptthread)."""
         try:
             while True:
                 kind, payload = self._data_queue.get_nowait()
@@ -253,12 +253,30 @@ class InstrumentTable(ctk.CTkFrame):
 
         for idx, row in enumerate(rows):
             tags: list[str] = ["even" if idx % 2 == 0 else "odd"]
-            # Grüne Hervorhebung wenn Dividendenwert vorhanden
+
+            # Div-Hervorhebung
             if row[3] and row[3] != "—":
                 tags.append("has_div")
-            # row[4] (isin_raw) ist interner Wert, nicht anzeigen
-            self._tree.insert("", "end", values=row[:4], tags=tags,
-                               iid=row[4])  # ISIN als Item-ID
+
+            # Score-Hervorhebung anhand des Score-Displays
+            score_str = row[4].strip()
+            if score_str and score_str != "—":
+                try:
+                    score_val = int(score_str.split()[0])
+                    if score_val >= 75:
+                        tags.append("score_sb")
+                    elif score_val >= 55:
+                        tags.append("score_buy")
+                    elif score_val >= 35:
+                        tags.append("score_watch")
+                    else:
+                        tags.append("score_reject")
+                except (ValueError, IndexError):
+                    pass
+
+            # row[5] = isin_raw als Item-ID; row[:5] = anzuzeigende Werte
+            self._tree.insert("", "end", values=row[:5], tags=tags,
+                               iid=row[5])
 
         self._set_status(f"{len(rows):,} Einträge")
 
@@ -290,7 +308,7 @@ class InstrumentTable(ctk.CTkFrame):
 
     def _sort_by(self, col: str) -> None:
         if col == self._COL_FLAG:
-            return  # Multifunktionsspalte ist nicht sortierbar
+            return
         self._sort_asc = not self._sort_asc if self._sort_col == col else True
         self._sort_col = col
         self._sort_rows()
@@ -307,6 +325,11 @@ class InstrumentTable(ctk.CTkFrame):
                     return float(val.replace("%", "").strip())
                 except (ValueError, AttributeError):
                     return -9999.0
+            if self._sort_col == self._COL_SCORE:
+                try:
+                    return int(val.split()[0])
+                except (ValueError, AttributeError, IndexError):
+                    return -1
             return val.lower() if isinstance(val, str) else val
 
         self._filtered_rows.sort(key=key, reverse=not self._sort_asc)
@@ -320,29 +343,23 @@ class InstrumentTable(ctk.CTkFrame):
                 suffix = "  ▲" if self._sort_asc else "  ▼"
             self._tree.heading(col, text=cfg["heading"] + suffix)
 
-    # ── Öffentliche Hilfsmethode ──────────────────────────────────────────────
+    # ── Öffentliche Hilfsmethoden ─────────────────────────────────────────────
 
     def set_double_click_callback(
         self, callback: Callable[[str], None]
     ) -> None:
-        """
-        Registriert einen Callback für Doppelklick auf eine Zeile.
-
-        Args:
-            callback: Wird mit der ISIN der angeklickten Zeile aufgerufen.
-        """
+        """Registriert Callback für Doppelklick — wird mit ISIN aufgerufen."""
         self._double_click_cb = callback
 
     def _on_double_click(self, event: tk.Event) -> None:
-        """Verarbeitet Doppelklick — ermittelt ISIN und ruft Callback."""
         region = self._tree.identify_region(event.x, event.y)
         if region != "cell":
             return
         isin = self.get_selected_isin()
         if isin and self._double_click_cb:
-            self._double_click_cb(isin)    
+            self._double_click_cb(isin)
 
     def get_selected_isin(self) -> str | None:
-        """Gibt die ISIN des aktuell selektierten Eintrags zurück."""
+        """Gibt ISIN des aktuell selektierten Eintrags zurück."""
         selection = self._tree.selection()
         return selection[0] if selection else None
