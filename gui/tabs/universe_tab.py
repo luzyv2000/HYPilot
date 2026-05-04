@@ -1,14 +1,21 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-04-22-D
+# Version:       2026-05-04
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          core.dividend_service,
-#                          db.dividend_repository
+#                          db.dividend_repository,
+#                          analysis.scorer
 # Abhängigkeiten (extern): customtkinter
 """
 gui/tabs/universe_tab.py
 
-TR-Universum-Tab mit Batch-Dividenden-Update und
-manueller Namensänderung via Doppelklick.
+TR-Universum-Tab mit Batch-Dividenden-Update, manueller Namensänderung
+und Score-Spalte.
+
+Row-Format (6 Elemente):
+  (flag, name, isin_wkn, div_display, score_display, isin_raw)
+
+Score wird in _load_instruments() im Hintergrund-Thread berechnet
+(pure Python, kein Netzwerk-Call, < 1s für ~3000 Zeilen mit Daten).
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ import logging
 import queue
 import sqlite3
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -28,17 +36,32 @@ logger = logging.getLogger(__name__)
 
 DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
+# Alle für Score-Berechnung nötigen Spalten laden
 _QUERY = """
     SELECT
         COALESCE(i.name_override, i.name) AS display_name,
         i.isin,
-        COALESCE(i.wkn, '') AS wkn,
+        COALESCE(i.wkn, '')              AS wkn,
         d.yield_bps,
+        d.frequency,
+        d.last_amount_micro,
+        d.last_ex_date,
+        d.currency,
+        d.payout_ratio_bps,
+        d.data_source,
         CASE WHEN i.name_override IS NOT NULL THEN 1 ELSE 0 END AS has_override
     FROM instruments i
     LEFT JOIN dividend_data d ON i.isin = d.isin
     ORDER BY display_name ASC
 """
+
+# Rating-Kürzel für Score-Anzeige
+_RATING_SHORT = {
+    "STRONG_BUY": "SB",
+    "BUY":        "B",
+    "WATCH":      "W",
+    "REJECT":     "R",
+}
 
 
 def _format_div(yield_bps: int | None) -> str:
@@ -51,25 +74,72 @@ def _format_isin_wkn(isin: str, wkn: str) -> str:
     return f"{isin}\n{wkn}" if wkn else isin
 
 
+def _format_score(score_total: int, rating: str) -> str:
+    """Formatiert Score-Wert für Tabellenanzeige."""
+    short = _RATING_SHORT.get(rating, rating[:1])
+    return f"{score_total} {short}"
+
+
 def _load_instruments() -> list[Row]:
+    """
+    Lädt alle Instrumente aus der DB und berechnet Scores für Zeilen
+    mit vorhandenen Dividendendaten.
+
+    Läuft im Hintergrund-Thread — kein Netzwerk-Zugriff.
+    Score-Berechnung ist pure Python (< 1s für ~3000 Zeilen mit Daten).
+    """
+    from analysis.scorer import score_dividend_snapshot
+    from core.dividend_source import DividendSnapshot
+
     rows: list[Row] = []
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             for db_row in conn.execute(_QUERY):
-                # Kleines ✎-Präfix wenn name_override aktiv
+                # ✎-Präfix wenn name_override aktiv
                 name = db_row["display_name"]
                 if db_row["has_override"]:
                     name = "✎ " + name
+
+                # Score berechnen wenn Dividendendaten vorhanden
+                score_display = "—"
+                if db_row["yield_bps"] is not None or db_row["frequency"] is not None:
+                    try:
+                        last_ex = (
+                            date.fromisoformat(db_row["last_ex_date"])
+                            if db_row["last_ex_date"]
+                            else None
+                        )
+                        snapshot = DividendSnapshot(
+                            isin=db_row["isin"],
+                            yield_bps=db_row["yield_bps"],
+                            frequency=db_row["frequency"],
+                            last_amount_micro=db_row["last_amount_micro"],
+                            last_ex_date=last_ex,
+                            currency=db_row["currency"] or "USD",
+                            payout_ratio_bps=db_row["payout_ratio_bps"],
+                            data_source=db_row["data_source"] or "yfinance",
+                        )
+                        score = score_dividend_snapshot(snapshot)
+                        score_display = _format_score(score.total, score.rating)
+                    except Exception:
+                        logger.debug(
+                            "Score-Berechnung fehlgeschlagen für %s.",
+                            db_row["isin"],
+                        )
+
                 rows.append((
                     "",
                     name,
                     _format_isin_wkn(db_row["isin"], db_row["wkn"]),
                     _format_div(db_row["yield_bps"]),
-                    db_row["isin"],
+                    score_display,
+                    db_row["isin"],   # isin_raw — Index 5, Item-ID
                 ))
+
     except sqlite3.Error:
         logger.exception("Datenbankfehler beim Laden des Universums.")
+
     logger.info("Universe geladen: %d Instrumente.", len(rows))
     return rows
 
@@ -125,10 +195,15 @@ class UniverseTab(ctk.CTkFrame):
             command=self._on_filter_change,
         ).pack(side="left", padx=(0, 8))
 
+        self._scored_only_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            bar, text="Nur mit Score",
+            variable=self._scored_only_var,
+            command=self._on_filter_change,
+        ).pack(side="left", padx=(0, 8))
+
         ctk.CTkFrame(bar, width=2, height=24,
-                     fg_color=("gray70", "gray40")).pack(
-            side="left", padx=12
-        )
+                     fg_color=("gray70", "gray40")).pack(side="left", padx=12)
 
         self._batch_btn = ctk.CTkButton(
             bar,
@@ -141,21 +216,16 @@ class UniverseTab(ctk.CTkFrame):
         self._batch_btn.pack(side="left", padx=(0, 8))
 
         ctk.CTkFrame(bar, width=2, height=24,
-                     fg_color=("gray70", "gray40")).pack(
-            side="left", padx=12
-        )
+                     fg_color=("gray70", "gray40")).pack(side="left", padx=12)
 
-        # Pending-Badge Button
         self._pending_btn = ctk.CTkButton(
-            bar,
-            text="",
-            width=180,
+            bar, text="", width=180,
             fg_color=("orange3", "#b35c00"),
             hover_color=("orange4", "#8a4500"),
             command=self._open_pending_dialog,
         )
         self._pending_btn.pack(side="left", padx=(0, 8))
-        self._pending_btn.pack_forget()  # initial versteckt
+        self._pending_btn.pack_forget()
 
     def _build_progress_bar(self) -> None:
         self._progress_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -192,37 +262,25 @@ class UniverseTab(ctk.CTkFrame):
     # ── Namensänderung ────────────────────────────────────────────────────────
 
     def _on_row_double_click(self, isin: str) -> None:
-        """Öffnet Name-Edit-Dialog für die angeklickte ISIN."""
         from gui.widgets.name_edit_dialog import NameEditDialog
-        NameEditDialog(
-            self,
-            isin=isin,
-            on_saved=self._on_name_saved,
-        )
+        NameEditDialog(self, isin=isin, on_saved=self._on_name_saved)
 
     def _on_name_saved(self) -> None:
-        """Tabelle neu laden nach Namensänderung."""
         self._table.load_data(_load_instruments)
 
     def _open_pending_dialog(self) -> None:
         from gui.widgets.pending_names_dialog import PendingNamesDialog
-        PendingNamesDialog(
-            self,
-            on_closed=self._on_pending_dialog_closed,
-        )
+        PendingNamesDialog(self, on_closed=self._on_pending_dialog_closed)
 
     def _on_pending_dialog_closed(self) -> None:
         self._refresh_pending_badge()
         self._table.load_data(_load_instruments)
 
     def _refresh_pending_badge(self) -> None:
-        """Aktualisiert Pending-Badge in der Toolbar."""
         from db.instrument_repository import count_pending_name_changes
         count = count_pending_name_changes()
         if count > 0:
-            self._pending_btn.configure(
-                text=f"⚠  {count} Namensänderung(en)"
-            )
+            self._pending_btn.configure(text=f"⚠  {count} Namensänderung(en)")
             self._pending_btn.pack(side="left", padx=(0, 8))
         else:
             self._pending_btn.pack_forget()
@@ -331,20 +389,24 @@ class UniverseTab(ctk.CTkFrame):
         self._on_filter_change()
 
     def _on_filter_change(self) -> None:
-        category = self._category_var.get()
-        div_only = self._div_only_var.get()
+        category    = self._category_var.get()
+        div_only    = self._div_only_var.get()
+        scored_only = self._scored_only_var.get()
+
         from analysis.rules import classify_instrument
 
         def filtered_loader() -> list[Row]:
-            base = _load_instruments()
+            base   = _load_instruments()
             result = []
             for row in base:
+                # row[5] = isin_raw, row[1] = name, row[3] = div, row[4] = score
                 if category != "Alle":
-                    # ✎-Präfix für classify entfernen
                     clean_name = row[1].lstrip("✎ ")
-                    if classify_instrument(clean_name, row[4]) != category:
+                    if classify_instrument(clean_name, row[5]) != category:
                         continue
                 if div_only and row[3] == "—":
+                    continue
+                if scored_only and row[4] == "—":
                     continue
                 result.append(row)
             return result
