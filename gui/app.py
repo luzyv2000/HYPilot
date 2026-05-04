@@ -1,5 +1,5 @@
 # Dateiname:     gui/app.py
-# Version:       2026-04-23-P3pp
+# Version:       2026-05-04
 # Abhängigkeiten (intern): gui.tabs.universe_tab
 # Abhängigkeiten (extern): customtkinter
 """
@@ -7,9 +7,12 @@ gui/app.py
 
 HYPilot Hauptfenster.
 
-Startup-Checks:
-  1. Schwellwert-Popup wenn neue 10%-Überschreitungen vorhanden
-  2. Statusleiste zeigt Zusammenfassung des letzten Auto-Laufs
+Startup-Sequenz (800 ms nach erstem Rendern):
+  1. Statusleiste mit Zusammenfassung des letzten Auto-Laufs befüllen
+  2. ThresholdCrossingPopup öffnen wenn ungesehene Crossings vorhanden
+
+Fenstergröße wird in der SQLite-Tabelle metadata gespeichert
+und beim nächsten Start wiederhergestellt.
 """
 
 from __future__ import annotations
@@ -25,8 +28,9 @@ from gui.tabs.universe_tab import UniverseTab
 
 logger = logging.getLogger(__name__)
 
-DB_PATH          = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
-_DEFAULT_GEOMETRY = "1400x900"
+DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
+
+_DEFAULT_GEOMETRY = "1440x900"
 _GEO_KEY          = "gui_geometry"
 
 
@@ -45,8 +49,7 @@ class HYPilotApp(ctk.CTk):
         self._build_tab_view()
         self._build_status_bar()
 
-        # Startup-Checks nach kurzem Delay
-        # (Fenster muss vollständig gerendert sein)
+        # Startup-Checks nach kurzem Delay (Fenster muss vollständig gerendert sein)
         self.after(800, self._startup_checks)
 
     # ── Geometrie ─────────────────────────────────────────────────────────────
@@ -72,11 +75,12 @@ class HYPilotApp(ctk.CTk):
                 )
                 conn.commit()
         except sqlite3.Error:
-            logger.warning("Fenstergeometrie nicht gespeichert.")
+            logger.warning("Fenstergeometrie konnte nicht gespeichert werden.")
 
     # ── Menüleiste ────────────────────────────────────────────────────────────
 
     def _build_menu_bar(self) -> None:
+        """Einfache Menüleiste via CTkFrame + CTkButton."""
         bar = ctk.CTkFrame(self, height=36, corner_radius=0)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
@@ -89,7 +93,9 @@ class HYPilotApp(ctk.CTk):
         }
         for label, command in menus.items():
             ctk.CTkButton(
-                bar, text=label, width=72, height=30,
+                bar,
+                text=label,
+                width=72, height=30,
                 fg_color="transparent",
                 hover_color=("gray80", "gray30"),
                 corner_radius=4,
@@ -97,7 +103,7 @@ class HYPilotApp(ctk.CTk):
             ).pack(side="left", padx=2, pady=3)
 
     def _menu_datei(self) -> None:
-        pass
+        pass  # Platzhalter
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
 
@@ -105,11 +111,13 @@ class HYPilotApp(ctk.CTk):
         self._tab_view = ctk.CTkTabview(self, corner_radius=4)
         self._tab_view.pack(fill="both", expand=True, padx=6, pady=(0, 0))
 
+        # Tab: TR-Universum
         self._tab_view.add("TR-Universum")
         UniverseTab(
             self._tab_view.tab("TR-Universum")
         ).pack(fill="both", expand=True)
 
+        # Weitere Tabs (Platzhalter)
         for name in ("Analyse", "Watchlist", "Portfolio"):
             self._tab_view.add(name)
             ctk.CTkLabel(
@@ -121,20 +129,20 @@ class HYPilotApp(ctk.CTk):
     # ── Statusleiste ──────────────────────────────────────────────────────────
 
     def _build_status_bar(self) -> None:
-        bar = ctk.CTkFrame(self, height=28, corner_radius=0)
+        bar = ctk.CTkFrame(self, height=26, corner_radius=0)
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
 
         self._status_label = ctk.CTkLabel(
             bar,
             text="",
-            text_color=("gray40", "gray70"),
+            text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=11),
             anchor="w",
         )
         self._status_label.pack(side="left", padx=10)
 
-    def _update_status(self, text: str) -> None:
+    def _set_status(self, text: str) -> None:
         self._status_label.configure(text=text)
 
     def _load_last_run_summary(self) -> str:
@@ -162,27 +170,40 @@ class HYPilotApp(ctk.CTk):
 
     def _startup_checks(self) -> None:
         """
-        Wird 800ms nach Start ausgeführt.
-        1. Statusleiste mit letztem Auto-Lauf befüllen
-        2. Schwellwert-Popup falls neue Überschreitungen vorhanden
+        Wird 800 ms nach Start ausgeführt.
+        1. Statusleiste mit letztem Auto-Lauf befüllen.
+        2. ThresholdCrossingPopup öffnen falls neue Überschreitungen vorhanden.
         """
         summary = self._load_last_run_summary()
         if summary:
-            self._update_status(summary)
+            self._set_status(summary)
 
-        from db.dividend_repository import get_unshown_threshold_crossings
-        crossings = get_unshown_threshold_crossings()
+        try:
+            from db.dividend_repository import get_unshown_threshold_crossings
+            crossings = get_unshown_threshold_crossings()
+        except Exception:
+            logger.exception("Fehler beim Laden der Threshold-Crossings.")
+            return
 
         if crossings:
             logger.info(
-                "%d neue Schwellwert-Überschreitungen — öffne Popup.",
+                "%d ungesehene Schwellwert-Überschreitungen — öffne Popup.",
                 len(crossings),
             )
             self._open_threshold_popup()
 
     def _open_threshold_popup(self) -> None:
-        from gui.widgets.threshold_popup import ThresholdPopup
-        ThresholdPopup(self, on_closed=None)
+        from gui.widgets.threshold_crossing_popup import ThresholdCrossingPopup
+        ThresholdCrossingPopup(
+            self,
+            on_closed=self._on_threshold_popup_closed,
+        )
+
+    def _on_threshold_popup_closed(self) -> None:
+        """Status neu laden nachdem Popup geschlossen wurde."""
+        summary = self._load_last_run_summary()
+        if summary:
+            self._set_status(summary)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
