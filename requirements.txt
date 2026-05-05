@@ -1,32 +1,42 @@
 # HYPilot — direkte Abhängigkeiten
-# Stand: 2026-04-24a
+# Stand: 2026-05-05
 #
 # Installation: pip install -r requirements.txt
+#
+# Entscheidungen:
+#   P6 (PyMuPDF): behalten — GUI-Vorschau geplant, noch nicht integriert
+#   P7 (Selenium): entfernt — PDF-Quelle stabil, kein Scraping nötig
+#   pdfplumber:  aktiv genutzt für TR-Instrument-Universe-PDF
+#   ruff:        Linting (ersetzt flake8)
 
-# PDF-Parsing
+# ── PDF-Parsing ───────────────────────────────────────────────────────────────
 pdfplumber==0.11.9
-# PyMuPDF: geplant für GUI-Vorschau (noch nicht integriert)
+
+# PyMuPDF: für zukünftige GUI-Vorschau (P6, noch nicht aktiv integriert)
 # PyMuPDF>=1.23
 
-# Marktdaten / Dividenden
+# ── Marktdaten / Dividenden ───────────────────────────────────────────────────
 yfinance==1.2.2
 pandas==3.0.2
 
-# HTTP
+# ── HTTP ─────────────────────────────────────────────────────────────────────
 requests==2.33.1
 
-# GUI
+# ── GUI ──────────────────────────────────────────────────────────────────────
 customtkinter==5.2.2
 
-# Konfiguration
+# ── Konfiguration ─────────────────────────────────────────────────────────────
 python-dotenv>=1.0
 
-# Datumsberechnung (18-Monats-Regel)
+# ── Datumsberechnung (18-Monats-Regel) ───────────────────────────────────────
 python-dateutil>=2.9
 
-# Testing
+# ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0
 pytest-xdist>=3.5
 hypothesis>=6.100
 pytest-benchmark>=4.0
 responses>=0.25
+
+# ── Linting (CI) ──────────────────────────────────────────────────────────────
+ruff>=0.4
