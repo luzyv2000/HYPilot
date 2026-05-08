@@ -1,6 +1,6 @@
 # Dateiname:     gui/app.py
-# Version:       2026-05-04
-# Abhängigkeiten (intern): gui.tabs.universe_tab
+# Version:       2026-05-08-A
+# Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab
 # Abhängigkeiten (extern): customtkinter
 """
 gui/app.py
@@ -10,6 +10,13 @@ HYPilot Hauptfenster.
 Startup-Sequenz (800 ms nach erstem Rendern):
   1. Statusleiste mit Zusammenfassung des letzten Auto-Laufs befüllen
   2. ThresholdCrossingPopup öffnen wenn ungesehene Crossings vorhanden
+
+Tabs:
+  - TR-Universum   : vollständiges Instrument-Universum
+  - High-Yield ≥10%: vorgefilterter Datensatz + CSV-Export
+  - Analyse        : Platzhalter
+  - Watchlist      : Platzhalter
+  - Portfolio      : Platzhalter
 
 Fenstergröße wird in der SQLite-Tabelle metadata gespeichert
 und beim nächsten Start wiederhergestellt.
@@ -25,6 +32,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from gui.tabs.universe_tab import UniverseTab
+from gui.tabs.high_yield_tab import HighYieldTab
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +57,6 @@ class HYPilotApp(ctk.CTk):
         self._build_tab_view()
         self._build_status_bar()
 
-        # Startup-Checks nach kurzem Delay (Fenster muss vollständig gerendert sein)
         self.after(800, self._startup_checks)
 
     # ── Geometrie ─────────────────────────────────────────────────────────────
@@ -80,7 +87,6 @@ class HYPilotApp(ctk.CTk):
     # ── Menüleiste ────────────────────────────────────────────────────────────
 
     def _build_menu_bar(self) -> None:
-        """Einfache Menüleiste via CTkFrame + CTkButton."""
         bar = ctk.CTkFrame(self, height=36, corner_radius=0)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
@@ -117,7 +123,13 @@ class HYPilotApp(ctk.CTk):
             self._tab_view.tab("TR-Universum")
         ).pack(fill="both", expand=True)
 
-        # Weitere Tabs (Platzhalter)
+        # Tab: High-Yield
+        self._tab_view.add("High-Yield ≥10 %")
+        HighYieldTab(
+            self._tab_view.tab("High-Yield ≥10 %")
+        ).pack(fill="both", expand=True)
+
+        # Platzhalter-Tabs
         for name in ("Analyse", "Watchlist", "Portfolio"):
             self._tab_view.add(name)
             ctk.CTkLabel(
@@ -146,7 +158,6 @@ class HYPilotApp(ctk.CTk):
         self._status_label.configure(text=text)
 
     def _load_last_run_summary(self) -> str:
-        """Liest Zusammenfassung des letzten Auto-Laufs aus metadata."""
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 row = conn.execute(
@@ -154,9 +165,9 @@ class HYPilotApp(ctk.CTk):
                 ).fetchone()
             if not row:
                 return ""
-            data     = json.loads(row[0])
-            run_at   = data.get("run_at", "")[:16].replace("T", " ")
-            stats    = data.get("stats", {})
+            data      = json.loads(row[0])
+            run_at    = data.get("run_at", "")[:16].replace("T", " ")
+            stats     = data.get("stats", {})
             crossings = data.get("crossings", 0)
             return (
                 f"Letzter Auto-Lauf: {run_at}  |  "
@@ -169,11 +180,6 @@ class HYPilotApp(ctk.CTk):
     # ── Startup-Checks ────────────────────────────────────────────────────────
 
     def _startup_checks(self) -> None:
-        """
-        Wird 800 ms nach Start ausgeführt.
-        1. Statusleiste mit letztem Auto-Lauf befüllen.
-        2. ThresholdCrossingPopup öffnen falls neue Überschreitungen vorhanden.
-        """
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
@@ -200,7 +206,6 @@ class HYPilotApp(ctk.CTk):
         )
 
     def _on_threshold_popup_closed(self) -> None:
-        """Status neu laden nachdem Popup geschlossen wurde."""
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
