@@ -1,5 +1,5 @@
 # Dateiname:     gui/widgets/instrument_table.py
-# Version:       2026-05-04
+# Version:       2026-05-08
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): customtkinter
 """
@@ -17,6 +17,10 @@ Spalten:
 Row-Typ (6 Elemente):
   (flag, name, isin_wkn, div_display, score_display, isin_raw)
   isin_raw wird nicht angezeigt, aber als Item-ID genutzt.
+
+Callbacks:
+  set_double_click_callback(cb) — Doppelklick → Name-Edit
+  set_select_callback(cb)       — Einfachklick / Pfeiltasten → Score-Detail
 
 Threading:
   Datenladen läuft in threading.Thread.
@@ -90,6 +94,7 @@ class InstrumentTable(ctk.CTkFrame):
         self._search_after_id: str | None = None
         self._data_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._double_click_cb: Callable[[str], None] | None = None
+        self._select_cb: Callable[[str], None] | None = None
 
         self._build()
         self.after(100, self._process_queue)
@@ -162,6 +167,7 @@ class InstrumentTable(ctk.CTkFrame):
             )
 
         self._tree.bind("<Double-1>", self._on_double_click)
+        self._tree.bind("<<TreeviewSelect>>", self._on_select)
 
     def _apply_treeview_style(self) -> None:
         """Passt Treeview-Farben an CTk-Erscheinungsbild an."""
@@ -177,11 +183,10 @@ class InstrumentTable(ctk.CTkFrame):
         even_bg = "#2b2b2b" if dark else "#f0f0f0"
         div_fg  = "#66bb6a" if dark else "#2e7d32"
 
-        # Score-Farben
-        score_sb_fg   = "#66bb6a" if dark else "#1b5e20"   # STRONG_BUY — dunkelgrün
-        score_buy_fg  = "#aed581" if dark else "#558b2f"   # BUY        — hellgrün
-        score_w_fg    = "#ffb74d" if dark else "#e65100"   # WATCH      — orange
-        score_r_fg    = "#ef5350" if dark else "#b71c1c"   # REJECT     — rot
+        score_sb_fg   = "#66bb6a" if dark else "#1b5e20"
+        score_buy_fg  = "#aed581" if dark else "#558b2f"
+        score_w_fg    = "#ffb74d" if dark else "#e65100"
+        score_r_fg    = "#ef5350" if dark else "#b71c1c"
 
         style = ttk.Style()
         try:
@@ -254,11 +259,9 @@ class InstrumentTable(ctk.CTkFrame):
         for idx, row in enumerate(rows):
             tags: list[str] = ["even" if idx % 2 == 0 else "odd"]
 
-            # Div-Hervorhebung
             if row[3] and row[3] != "—":
                 tags.append("has_div")
 
-            # Score-Hervorhebung anhand des Score-Displays
             score_str = row[4].strip()
             if score_str and score_str != "—":
                 try:
@@ -274,7 +277,6 @@ class InstrumentTable(ctk.CTkFrame):
                 except (ValueError, IndexError):
                     pass
 
-            # row[5] = isin_raw als Item-ID; row[:5] = anzuzeigende Werte
             self._tree.insert("", "end", values=row[:5], tags=tags,
                                iid=row[5])
 
@@ -348,8 +350,14 @@ class InstrumentTable(ctk.CTkFrame):
     def set_double_click_callback(
         self, callback: Callable[[str], None]
     ) -> None:
-        """Registriert Callback für Doppelklick — wird mit ISIN aufgerufen."""
+        """Doppelklick → Name-Edit-Dialog."""
         self._double_click_cb = callback
+
+    def set_select_callback(
+        self, callback: Callable[[str], None]
+    ) -> None:
+        """Selektion (Klick / Pfeiltasten) → Score-Detail-Panel."""
+        self._select_cb = callback
 
     def _on_double_click(self, event: tk.Event) -> None:
         region = self._tree.identify_region(event.x, event.y)
@@ -358,6 +366,12 @@ class InstrumentTable(ctk.CTkFrame):
         isin = self.get_selected_isin()
         if isin and self._double_click_cb:
             self._double_click_cb(isin)
+
+    def _on_select(self, event: tk.Event) -> None:
+        """Feuert bei jeder Selektion — auch via Tastatur."""
+        isin = self.get_selected_isin()
+        if isin and self._select_cb:
+            self._select_cb(isin)
 
     def get_selected_isin(self) -> str | None:
         """Gibt ISIN des aktuell selektierten Eintrags zurück."""
