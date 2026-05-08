@@ -1,6 +1,7 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-05-04
+# Version:       2026-05-08
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
+#                          gui.widgets.score_detail_panel,
 #                          core.dividend_service,
 #                          db.dividend_repository,
 #                          analysis.scorer
@@ -8,14 +9,17 @@
 """
 gui/tabs/universe_tab.py
 
-TR-Universum-Tab mit Batch-Dividenden-Update, manueller Namensänderung
-und Score-Spalte.
+TR-Universum-Tab mit Batch-Dividenden-Update, manueller Namensänderung,
+Score-Spalte und Score-Detail-Panel.
+
+Grid-Layout:
+  Row 0: Toolbar
+  Row 1: Fortschrittsbalken (bedingt)
+  Row 2: InstrumentTable (weight=1, füllt restlichen Platz)
+  Row 3: ScoreDetailPanel (feste Höhe ~160px)
 
 Row-Format (6 Elemente):
   (flag, name, isin_wkn, div_display, score_display, isin_raw)
-
-Score wird in _load_instruments() im Hintergrund-Thread berechnet
-(pure Python, kein Netzwerk-Call, < 1s für ~3000 Zeilen mit Daten).
 """
 
 from __future__ import annotations
@@ -31,12 +35,12 @@ from typing import Any
 import customtkinter as ctk
 
 from gui.widgets.instrument_table import InstrumentTable, Row
+from gui.widgets.score_detail_panel import ScoreDetailPanel
 
 logger = logging.getLogger(__name__)
 
 DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
-# Alle für Score-Berechnung nötigen Spalten laden
 _QUERY = """
     SELECT
         COALESCE(i.name_override, i.name) AS display_name,
@@ -55,7 +59,6 @@ _QUERY = """
     ORDER BY display_name ASC
 """
 
-# Rating-Kürzel für Score-Anzeige
 _RATING_SHORT = {
     "STRONG_BUY": "SB",
     "BUY":        "B",
@@ -75,18 +78,14 @@ def _format_isin_wkn(isin: str, wkn: str) -> str:
 
 
 def _format_score(score_total: int, rating: str) -> str:
-    """Formatiert Score-Wert für Tabellenanzeige."""
     short = _RATING_SHORT.get(rating, rating[:1])
     return f"{score_total} {short}"
 
 
 def _load_instruments() -> list[Row]:
     """
-    Lädt alle Instrumente aus der DB und berechnet Scores für Zeilen
-    mit vorhandenen Dividendendaten.
-
+    Lädt alle Instrumente aus der DB und berechnet Scores.
     Läuft im Hintergrund-Thread — kein Netzwerk-Zugriff.
-    Score-Berechnung ist pure Python (< 1s für ~3000 Zeilen mit Daten).
     """
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
@@ -96,12 +95,10 @@ def _load_instruments() -> list[Row]:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             for db_row in conn.execute(_QUERY):
-                # ✎-Präfix wenn name_override aktiv
                 name = db_row["display_name"]
                 if db_row["has_override"]:
                     name = "✎ " + name
 
-                # Score berechnen wenn Dividendendaten vorhanden
                 score_display = "—"
                 if db_row["yield_bps"] is not None or db_row["frequency"] is not None:
                     try:
@@ -134,7 +131,7 @@ def _load_instruments() -> list[Row]:
                     _format_isin_wkn(db_row["isin"], db_row["wkn"]),
                     _format_div(db_row["yield_bps"]),
                     score_display,
-                    db_row["isin"],   # isin_raw — Index 5, Item-ID
+                    db_row["isin"],
                 ))
 
     except sqlite3.Error:
@@ -162,6 +159,7 @@ class UniverseTab(ctk.CTkFrame):
         self._build_toolbar()
         self._build_progress_bar()
         self._build_table()
+        self._build_detail_panel()
 
         self._table.load_data(_load_instruments)
         self._refresh_pending_badge()
@@ -258,6 +256,26 @@ class UniverseTab(ctk.CTkFrame):
         self._table = InstrumentTable(self)
         self._table.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
         self._table.set_double_click_callback(self._on_row_double_click)
+        self._table.set_select_callback(self._on_instrument_selected)
+
+    def _build_detail_panel(self) -> None:
+        """Score-Detail-Panel unterhalb der Tabelle."""
+        # Trennlinie
+        ctk.CTkFrame(
+            self, height=1, fg_color=("gray75", "gray30")
+        ).grid(row=3, column=0, sticky="ew", padx=0)
+
+        self._detail_panel = ScoreDetailPanel(self, height=160)
+        self._detail_panel.grid(
+            row=4, column=0, sticky="ew", padx=0, pady=0
+        )
+        self._detail_panel.grid_propagate(False)
+
+    # ── Selektion → Detail-Panel ──────────────────────────────────────────────
+
+    def _on_instrument_selected(self, isin: str) -> None:
+        """Callback von InstrumentTable bei Selektion."""
+        self._detail_panel.update(isin)
 
     # ── Namensänderung ────────────────────────────────────────────────────────
 
@@ -383,6 +401,7 @@ class UniverseTab(ctk.CTkFrame):
     # ── Filter ────────────────────────────────────────────────────────────────
 
     def _refresh(self) -> None:
+        self._detail_panel.clear()
         self._table.load_data(_load_instruments)
 
     def _on_category_change(self, _: str) -> None:
@@ -399,7 +418,6 @@ class UniverseTab(ctk.CTkFrame):
             base   = _load_instruments()
             result = []
             for row in base:
-                # row[5] = isin_raw, row[1] = name, row[3] = div, row[4] = score
                 if category != "Alle":
                     clean_name = row[1].lstrip("✎ ")
                     if classify_instrument(clean_name, row[5]) != category:
@@ -411,4 +429,5 @@ class UniverseTab(ctk.CTkFrame):
                 result.append(row)
             return result
 
+        self._detail_panel.clear()
         self._table.load_data(filtered_loader)
