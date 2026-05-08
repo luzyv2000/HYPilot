@@ -1,5 +1,5 @@
 # Dateiname:     ingestion/auto_dividend_update.py
-# Version:       2026-04-23-P3pp
+# Version:       2026-05-08
 # Abhängigkeiten (intern): core.dividend_service, core.email_service,
 #                          db.dividend_repository
 # Abhängigkeiten (extern): keine
@@ -46,7 +46,7 @@ LOG_FILE = LOG_DIR / "auto_dividend.log"
 # Bei 13.000 ISINs × 2 Läufe/Tag = 6,5 Stunden Abdeckung
 # → 3250 ISINs pro Lauf realistisch wenn yfinance ~2s/ISIN
 # Für den Start konservativ:
-_TOTAL_PER_RUN = 500
+_TOTAL_PER_RUN = 3500
 _BATCH_SIZE    = 100
 
 
