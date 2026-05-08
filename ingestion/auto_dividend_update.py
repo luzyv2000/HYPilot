@@ -1,5 +1,5 @@
 # Dateiname:     ingestion/auto_dividend_update.py
-# Version:       2026-05-08
+# Version:       2026-05-08-fix1
 # Abhängigkeiten (intern): core.dividend_service, core.email_service,
 #                          db.dividend_repository
 # Abhängigkeiten (extern): keine
@@ -17,6 +17,10 @@ Ablauf:
 
 Wird gestartet von:
   systemd/hypilot-dividends.timer (08:00 + 13:00)
+
+Kapazitätsplanung:
+  _TOTAL_PER_RUN = 3500 → ~117 Min pro Lauf bei ~2s/ISIN
+  2 Läufe/Tag × 3500 = 7000 ISINs → deckt gesamtes fälliges Universum ab
 """
 
 from __future__ import annotations
@@ -36,17 +40,12 @@ from core.email_service import send_batch_summary
 from db.dividend_repository import (
     DB_PATH,
     get_unshown_threshold_crossings,
-    mark_crossings_shown,
 )
 
 LOG_DIR  = Path("/home/luzy/workspace/openclaw-min/logs")
 LOG_FILE = LOG_DIR / "auto_dividend.log"
 
-# Gesamtzahl ISINs die pro Aufruf verarbeitet werden
-# Bei 13.000 ISINs × 2 Läufe/Tag = 6,5 Stunden Abdeckung
-# → 3250 ISINs pro Lauf realistisch wenn yfinance ~2s/ISIN
-# Für den Start konservativ:
-_TOTAL_PER_RUN = 3500
+_TOTAL_PER_RUN = 3500   # War: 500 (konservativer Startwert)
 _BATCH_SIZE    = 100
 
 
@@ -112,7 +111,11 @@ def main() -> int:
         processed += stats["processed"]
 
         if stats["processed"] < remaining:
-            # Keine weiteren fälligen ISINs
+            # Keine weiteren fälligen ISINs — frühzeitig beenden
+            logger.info(
+                "Keine weiteren fälligen ISINs nach %d verarbeiteten.",
+                processed,
+            )
             break
 
     logger.info(
