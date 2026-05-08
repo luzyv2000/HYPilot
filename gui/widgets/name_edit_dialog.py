@@ -1,5 +1,5 @@
 # Dateiname:     gui/widgets/name_edit_dialog.py
-# Version:       2026-04-22-A
+# Version:       2026-05-08-fix1
 # Abhängigkeiten (intern): db.instrument_repository
 # Abhängigkeiten (extern): customtkinter
 """
@@ -10,6 +10,11 @@ Modaler Dialog zum manuellen Bearbeiten des Wertpapiernamens.
 Öffnet sich via Doppelklick auf eine Tabellenzeile.
 Zeigt Original-PDF-Name + aktuellen Override.
 Leeres Feld = Override löschen (PDF-Name wird wieder angezeigt).
+
+Fix 2026-05-08: CTkToplevel-Timing-Problem behoben.
+  _build() + _load() werden via after(20) verzögert ausgeführt,
+  grab_set() erst via after(50) — verhindert leeres graues Fenster
+  in CustomTkinter >= 5.2.
 """
 
 from __future__ import annotations
@@ -48,11 +53,18 @@ class NameEditDialog(ctk.CTkToplevel):
         self.title("Name bearbeiten")
         self.geometry("520x280")
         self.resizable(False, False)
-        self.grab_set()   # modal
-        self.focus_set()
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        self._build()
-        self._load()
+        # Verzögerter Aufbau: Fenster muss vom Window-Manager
+        # gemappt sein bevor Widgets erstellt und grab_set() aufgerufen wird.
+        self.after(20, self._build)
+        self.after(20, self._load)
+        self.after(50, self._make_modal)
+
+    def _make_modal(self) -> None:
+        """Setzt Modal-Verhalten nach vollständigem Rendern."""
+        self.grab_set()
+        self.focus_set()
 
     def _build(self) -> None:
         self.grid_columnconfigure(1, weight=1)
