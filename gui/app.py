@@ -1,25 +1,19 @@
 # Dateiname:     gui/app.py
-# Version:       2026-05-08-A
-# Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab
+# Version:       2026-05-09-analyse
+# Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab,
+#                          gui.tabs.analyse_tab
 # Abhängigkeiten (extern): customtkinter
 """
 gui/app.py
 
 HYPilot Hauptfenster.
 
-Startup-Sequenz (800 ms nach erstem Rendern):
-  1. Statusleiste mit Zusammenfassung des letzten Auto-Laufs befüllen
-  2. ThresholdCrossingPopup öffnen wenn ungesehene Crossings vorhanden
-
 Tabs:
-  - TR-Universum   : vollständiges Instrument-Universum
-  - High-Yield ≥10%: vorgefilterter Datensatz + CSV-Export
-  - Analyse        : Platzhalter
-  - Watchlist      : Platzhalter
-  - Portfolio      : Platzhalter
-
-Fenstergröße wird in der SQLite-Tabelle metadata gespeichert
-und beim nächsten Start wiederhergestellt.
+  - TR-Universum      : vollständiges Instrument-Universum
+  - High-Yield ≥10%   : vorgefilterter Datensatz + CSV-Export
+  - Analyse           : Scoring-Verteilung, Top-20, Wachstums-Highlights
+  - Watchlist         : Platzhalter
+  - Portfolio         : Platzhalter
 """
 
 from __future__ import annotations
@@ -31,8 +25,9 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from gui.tabs.universe_tab import UniverseTab
+from gui.tabs.universe_tab   import UniverseTab
 from gui.tabs.high_yield_tab import HighYieldTab
+from gui.tabs.analyse_tab    import AnalyseTab
 
 logger = logging.getLogger(__name__)
 
@@ -47,16 +42,13 @@ class HYPilotApp(ctk.CTk):
 
     def __init__(self) -> None:
         super().__init__()
-
         self.title("HYPilot")
         self.minsize(900, 600)
         self._restore_geometry()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
         self._build_menu_bar()
         self._build_tab_view()
         self._build_status_bar()
-
         self.after(800, self._startup_checks)
 
     # ── Geometrie ─────────────────────────────────────────────────────────────
@@ -90,18 +82,14 @@ class HYPilotApp(ctk.CTk):
         bar = ctk.CTkFrame(self, height=36, corner_radius=0)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
-
-        menus = {
-            "Datei":   self._menu_datei,
+        for label, command in {
+            "Datei": self._menu_datei,
             "Ansicht": None,
             "Extras":  None,
             "Hilfe":   None,
-        }
-        for label, command in menus.items():
+        }.items():
             ctk.CTkButton(
-                bar,
-                text=label,
-                width=72, height=30,
+                bar, text=label, width=72, height=30,
                 fg_color="transparent",
                 hover_color=("gray80", "gray30"),
                 corner_radius=4,
@@ -109,28 +97,30 @@ class HYPilotApp(ctk.CTk):
             ).pack(side="left", padx=2, pady=3)
 
     def _menu_datei(self) -> None:
-        pass  # Platzhalter
+        pass
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
 
     def _build_tab_view(self) -> None:
         self._tab_view = ctk.CTkTabview(self, corner_radius=4)
-        self._tab_view.pack(fill="both", expand=True, padx=6, pady=(0, 0))
+        self._tab_view.pack(fill="both", expand=True, padx=6)
 
-        # Tab: TR-Universum
         self._tab_view.add("TR-Universum")
         UniverseTab(
             self._tab_view.tab("TR-Universum")
         ).pack(fill="both", expand=True)
 
-        # Tab: High-Yield
         self._tab_view.add("High-Yield ≥10 %")
         HighYieldTab(
             self._tab_view.tab("High-Yield ≥10 %")
         ).pack(fill="both", expand=True)
 
-        # Platzhalter-Tabs
-        for name in ("Analyse", "Watchlist", "Portfolio"):
+        self._tab_view.add("Analyse")
+        AnalyseTab(
+            self._tab_view.tab("Analyse")
+        ).pack(fill="both", expand=True)
+
+        for name in ("Watchlist", "Portfolio"):
             self._tab_view.add(name)
             ctk.CTkLabel(
                 self._tab_view.tab(name),
@@ -144,10 +134,8 @@ class HYPilotApp(ctk.CTk):
         bar = ctk.CTkFrame(self, height=26, corner_radius=0)
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
-
         self._status_label = ctk.CTkLabel(
-            bar,
-            text="",
+            bar, text="",
             text_color=("gray45", "gray65"),
             font=ctk.CTkFont(size=11),
             anchor="w",
@@ -200,10 +188,7 @@ class HYPilotApp(ctk.CTk):
 
     def _open_threshold_popup(self) -> None:
         from gui.widgets.threshold_crossing_popup import ThresholdCrossingPopup
-        ThresholdCrossingPopup(
-            self,
-            on_closed=self._on_threshold_popup_closed,
-        )
+        ThresholdCrossingPopup(self, on_closed=self._on_threshold_popup_closed)
 
     def _on_threshold_popup_closed(self) -> None:
         summary = self._load_last_run_summary()
