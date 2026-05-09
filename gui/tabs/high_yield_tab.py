@@ -1,33 +1,18 @@
 # Dateiname:     gui/tabs/high_yield_tab.py
-# Version:       2026-05-08
+# Version:       2026-05-09-growth
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
-#                          analysis.scorer
+#                          analysis.scorer, db.dividend_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/high_yield_tab.py
-
-High-Yield-Tab: zeigt nur Instrumente mit Dividendenrendite >= 10 %.
-
-Funktionen:
-  - Vorgefilterter Datensatz (yield_bps >= 1000), sortiert nach
-    Rendite absteigend
-  - CSV-Export der aktuell angezeigten Zeilen
-  - Score-Detail-Panel bei Selektion (identisch zu UniverseTab)
-  - Suchfeld (Name / ISIN / WKN)
-
-Architektur-Entscheidungen:
-  - Eigener Tab statt Filter in UniverseTab: unabhängiger Sortierstatus,
-    kein gegenseitiger Zustand, CSV-Export nur hier sinnvoll
-  - _load_high_yield() läuft im Hintergrund-Thread (kein Netzwerk-Call)
-  - CSV-Export läuft synchron im Hauptthread (< 50 ms für ~874 Zeilen)
+gui/tabs/high_yield_tab.py — High-Yield-Tab (≥ 10 %).
+Neu 2026-05-09: GrowthMetrics bulk-geladen für historienbasiertes Scoring.
 """
 
 from __future__ import annotations
 
 import csv
 import logging
-import queue
 import sqlite3
 import threading
 from datetime import date, datetime
@@ -44,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
-# Schwellwert: 10 % = 1000 bps
 _HIGH_YIELD_BPS: int = 1000
 
 _QUERY = """
@@ -66,18 +50,11 @@ _QUERY = """
     ORDER BY d.yield_bps DESC
 """
 
-_RATING_SHORT = {
-    "STRONG_BUY": "SB",
-    "BUY":        "B",
-    "WATCH":      "W",
-    "REJECT":     "R",
-}
+_RATING_SHORT = {"STRONG_BUY": "SB", "BUY": "B", "WATCH": "W", "REJECT": "R"}
 
 
 def _format_div(yield_bps: int | None) -> str:
-    if yield_bps is None:
-        return "—"
-    return f"{yield_bps / 100.0:.2f} %"
+    return "—" if yield_bps is None else f"{yield_bps / 100.0:.2f} %"
 
 
 def _format_isin_wkn(isin: str, wkn: str) -> str:
@@ -85,19 +62,18 @@ def _format_isin_wkn(isin: str, wkn: str) -> str:
 
 
 def _format_score(score_total: int, rating: str) -> str:
-    short = _RATING_SHORT.get(rating, rating[:1])
-    return f"{score_total} {short}"
+    return f"{score_total} {_RATING_SHORT.get(rating, rating[:1])}"
 
 
 def _load_high_yield() -> list[Row]:
-    """
-    Lädt alle High-Yield-Instrumente (>= 10 %) aus der DB.
-    Berechnet Score für jede Zeile. Läuft im Hintergrund-Thread.
-    """
+    """Lädt High-Yield-Instrumente mit historienbasiertem Scoring."""
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
+    from db.dividend_repository import get_growth_metrics_bulk
 
+    growth_map = get_growth_metrics_bulk(db_path=DB_PATH)
     rows: list[Row] = []
+
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -110,8 +86,7 @@ def _load_high_yield() -> list[Row]:
                 try:
                     last_ex = (
                         date.fromisoformat(db_row["last_ex_date"])
-                        if db_row["last_ex_date"]
-                        else None
+                        if db_row["last_ex_date"] else None
                     )
                     snapshot = DividendSnapshot(
                         isin=db_row["isin"],
@@ -123,13 +98,11 @@ def _load_high_yield() -> list[Row]:
                         payout_ratio_bps=db_row["payout_ratio_bps"],
                         data_source=db_row["data_source"] or "yfinance",
                     )
-                    score = score_dividend_snapshot(snapshot)
+                    metrics = growth_map.get(db_row["isin"])
+                    score   = score_dividend_snapshot(snapshot, growth_metrics=metrics)
                     score_display = _format_score(score.total, score.rating)
                 except Exception:
-                    logger.debug(
-                        "Score-Berechnung fehlgeschlagen für %s.",
-                        db_row["isin"],
-                    )
+                    logger.debug("Score fehlgeschlagen für %s.", db_row["isin"])
 
                 rows.append((
                     "",
@@ -152,26 +125,18 @@ class HighYieldTab(ctk.CTkFrame):
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
-
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
-        # Rohdaten für CSV-Export (werden beim Laden gespeichert)
         self._raw_rows: list[Row] = []
         self._raw_lock = threading.Lock()
-
         self._build_toolbar()
         self._build_table()
         self._build_detail_panel()
-
         self._table.load_data(self._loader_with_cache)
-
-    # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
-
         ctk.CTkLabel(
             bar,
             text="Instrumente mit Dividendenrendite ≥ 10 %",
@@ -179,38 +144,28 @@ class HighYieldTab(ctk.CTkFrame):
             text_color=("gray30", "gray80"),
             anchor="w",
         ).pack(side="left", padx=(0, 16))
-
         ctk.CTkButton(
-            bar,
-            text="↻  Aktualisieren",
-            width=140,
+            bar, text="↻  Aktualisieren", width=140,
             command=self._refresh,
         ).pack(side="left", padx=(0, 8))
-
         ctk.CTkButton(
             bar,
-            text="📥  CSV exportieren",
-            width=160,
+            text="📥  CSV exportieren", width=160,
             fg_color=("gray70", "gray30"),
             hover_color=("gray60", "gray40"),
             command=self._export_csv,
         ).pack(side="left", padx=(0, 8))
-
         self._count_label = ctk.CTkLabel(
-            bar,
-            text="",
+            bar, text="",
             text_color=("gray45", "gray65"),
-            font=ctk.CTkFont(size=11),
-            anchor="e",
+            font=ctk.CTkFont(size=11), anchor="e",
         )
         self._count_label.pack(side="right", padx=(0, 4))
 
     def _build_table(self) -> None:
-        # Trennlinie unter Toolbar
         ctk.CTkFrame(
             self, height=1, fg_color=("gray75", "gray30")
         ).grid(row=1, column=0, sticky="ew", padx=0)
-
         self._table = InstrumentTable(self)
         self._table.grid(row=2, column=0, sticky="nsew", padx=0, pady=0)
         self._table.set_select_callback(self._on_instrument_selected)
@@ -219,19 +174,14 @@ class HighYieldTab(ctk.CTkFrame):
         ctk.CTkFrame(
             self, height=1, fg_color=("gray75", "gray30")
         ).grid(row=3, column=0, sticky="ew", padx=0)
-
         self._detail_panel = ScoreDetailPanel(self, height=160)
         self._detail_panel.grid(row=4, column=0, sticky="ew", padx=0, pady=0)
         self._detail_panel.grid_propagate(False)
 
-    # ── Datenladen ────────────────────────────────────────────────────────────
-
     def _loader_with_cache(self) -> list[Row]:
-        """Lädt Daten, speichert Kopie für CSV-Export."""
         rows = _load_high_yield()
         with self._raw_lock:
             self._raw_rows = rows
-        # Anzahl-Label im Hauptthread aktualisieren
         self.after(0, lambda: self._count_label.configure(
             text=f"{len(rows)} Instrumente"
         ))
@@ -244,55 +194,32 @@ class HighYieldTab(ctk.CTkFrame):
     def _on_instrument_selected(self, isin: str) -> None:
         self._detail_panel.update(isin)
 
-    # ── CSV-Export ────────────────────────────────────────────────────────────
-
     def _export_csv(self) -> None:
-        """
-        Exportiert die aktuell geladenen High-Yield-Instrumente als CSV.
-        Synchron im Hauptthread — bei ~874 Zeilen < 50 ms.
-        """
         with self._raw_lock:
             rows = list(self._raw_rows)
-
         if not rows:
-            logger.info("CSV-Export: keine Daten vorhanden.")
             return
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+        timestamp    = datetime.now().strftime("%Y%m%d_%H%M")
         default_name = f"hypilot_high_yield_{timestamp}.csv"
-
         filepath = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV-Datei", "*.csv"), ("Alle Dateien", "*.*")],
             initialfile=default_name,
             title="High-Yield-Liste exportieren",
         )
-
         if not filepath:
-            return  # Nutzer hat abgebrochen
-
+            return
         try:
             with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.writer(f, delimiter=";")
-                writer.writerow([
-                    "Name", "ISIN", "WKN", "Rendite %", "Score", "ISIN_raw"
-                ])
+                writer.writerow(["Name", "ISIN", "WKN", "Rendite %", "Score"])
                 for row in rows:
-                    # row = (flag, name, isin_wkn, div, score, isin_raw)
-                    isin_wkn_parts = row[2].split("\n")
-                    isin_part = isin_wkn_parts[0]
-                    wkn_part  = isin_wkn_parts[1] if len(isin_wkn_parts) > 1 else ""
+                    parts    = row[2].split("\n")
+                    isin_p   = parts[0]
+                    wkn_p    = parts[1] if len(parts) > 1 else ""
                     writer.writerow([
-                        row[1].lstrip("✎ "),  # Name ohne Präfix
-                        isin_part,
-                        wkn_part,
-                        row[3],               # Rendite z.B. "12.34 %"
-                        row[4],               # Score z.B. "78 SB"
-                        row[5],               # ISIN raw
+                        row[1].lstrip("✎ "), isin_p, wkn_p, row[3], row[4],
                     ])
-
-            logger.info(
-                "CSV-Export: %d Zeilen → %s", len(rows), filepath
-            )
+            logger.info("CSV-Export: %d Zeilen → %s", len(rows), filepath)
         except OSError as exc:
             logger.error("CSV-Export fehlgeschlagen: %s", exc)
