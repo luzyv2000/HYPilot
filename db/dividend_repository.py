@@ -1,21 +1,27 @@
 # Dateiname:     db/dividend_repository.py
-# Version:       2026-04-25
+# Version:       2026-05-09-growth
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): python-dateutil
 """
 db/dividend_repository.py
 
-Datenbankoperationen für dividend_data, dividend_history
-und threshold_crossings.
+Datenbankoperationen für dividend_data, dividend_history,
+threshold_crossings und Wachstumsmetriken.
 
-Einzige Stelle im Projekt die direkt auf diese Tabellen schreibt.
+Neu 2026-05-09:
+  GrowthMetrics  — Datenklasse für Dividenden-Wachstumsanalyse
+  get_growth_metrics_bulk()  — einmaliger Abruf für alle ISINs (Tabellen)
+  get_growth_metrics()       — Einzelabruf pro ISIN (Detail-Panel)
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from dateutil.relativedelta import relativedelta
@@ -26,15 +32,170 @@ logger = logging.getLogger(__name__)
 
 DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 
-# Schwellwert für HYPilot-Kernziel
-_HIGH_YIELD_BPS: int = 1000          # 10 %
-
-# Nach 18 Monaten ohne Dividende → skip für 7 Tage
+_HIGH_YIELD_BPS: int = 1000
 _NO_DIV_MONTHS:  int = 18
 _SKIP_DAYS:      int = 7
-
-# Nur ISINs aktualisieren die älter als 6 Stunden sind
 _UPDATE_INTERVAL_HOURS: int = 6
+
+# Wachstumsanalyse: Vergleich über bis zu 4 Jahre
+_GROWTH_HISTORY_YEARS: int = 4
+
+
+# ── Wachstumsmetriken ─────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class GrowthMetrics:
+    """
+    Dividenden-Wachstumsmetriken aus dividend_history.
+
+    Felder:
+      years_of_data : Anzahl vollständiger Kalenderjahre mit Zahlungen
+                      (aktuelles Jahr wird für Konsistenz ausgeschlossen)
+      yoy_growth    : YoY-Wachstumsrate als Decimal (0.05 = 5%).
+                      None wenn weniger als 2 Jahres-Datenpunkte vorhanden.
+      has_cut       : True wenn in einem vollständigen Jahr die
+                      Gesamtdividende gegenüber dem Vorjahr gesunken ist.
+    """
+    years_of_data: int
+    yoy_growth:    Decimal | None
+    has_cut:       bool
+
+
+def _compute_growth_metrics(
+    year_data: list[tuple[str, int]],
+) -> GrowthMetrics:
+    """
+    Berechnet GrowthMetrics aus einer sortierten Liste von (Jahr, Betrag).
+
+    Args:
+        year_data: [(year_str, total_amount_micro), ...] aufsteigend sortiert.
+                   Enthält NUR vollständige Kalenderjahre (aktuelles Jahr
+                   bereits herausgefiltert).
+
+    Returns:
+        GrowthMetrics-Instanz.
+    """
+    if not year_data:
+        return GrowthMetrics(years_of_data=0, yoy_growth=None, has_cut=False)
+
+    totals = [total for _, total in year_data]
+    years_of_data = len(totals)
+
+    # YoY-Wachstum: letztes vollständiges Jahr vs. vorletztes
+    yoy_growth: Decimal | None = None
+    if years_of_data >= 2 and totals[-2] > 0:
+        yoy_growth = (
+            Decimal(str(totals[-1] - totals[-2]))
+            / Decimal(str(totals[-2]))
+        )
+
+    # Kürzungserkennung: jedes Jahr wo Gesamtbetrag < Vorjahr
+    has_cut = any(
+        totals[i] < totals[i - 1]
+        for i in range(1, len(totals))
+    )
+
+    return GrowthMetrics(
+        years_of_data=years_of_data,
+        yoy_growth=yoy_growth,
+        has_cut=has_cut,
+    )
+
+
+def get_growth_metrics_bulk(
+    db_path: Path = DB_PATH,
+) -> dict[str, GrowthMetrics]:
+    """
+    Berechnet Wachstumsmetriken für alle ISINs in einem einzigen DB-Abruf.
+    Geeignet für Tabellen-Rendering (einmal aufrufen, dict weitergeben).
+
+    Strategie:
+      - Jahressummen der letzten _GROWTH_HISTORY_YEARS Jahre via SQL
+      - Aktuelles Kalenderjahr ausgeschlossen (unvollständige Daten)
+      - Python-seitige Aggregation pro ISIN
+
+    Returns:
+        {isin: GrowthMetrics} für alle ISINs mit Historiedaten.
+        ISINs ohne Historie fehlen im Dict.
+    """
+    current_year = str(date.today().year)
+
+    query = """
+        SELECT
+            isin,
+            strftime('%Y', ex_date) AS yr,
+            SUM(amount_micro)       AS total
+        FROM dividend_history
+        WHERE
+            ex_date >= date('now', :neg_years)
+            AND strftime('%Y', ex_date) < :current_year
+        GROUP BY isin, yr
+        ORDER BY isin ASC, yr ASC
+    """
+
+    try:
+        with _get_connection(db_path) as conn:
+            rows = conn.execute(query, {
+                "neg_years":    f"-{_GROWTH_HISTORY_YEARS} years",
+                "current_year": current_year,
+            }).fetchall()
+    except sqlite3.Error:
+        logger.exception("Fehler beim Laden der Wachstumsmetriken (bulk).")
+        return {}
+
+    # Gruppierung nach ISIN
+    by_isin: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for row in rows:
+        by_isin[row["isin"]].append((row["yr"], row["total"]))
+
+    return {
+        isin: _compute_growth_metrics(year_data)
+        for isin, year_data in by_isin.items()
+    }
+
+
+def get_growth_metrics(
+    isin: str,
+    db_path: Path = DB_PATH,
+) -> GrowthMetrics | None:
+    """
+    Wachstumsmetriken für eine einzelne ISIN.
+    Geeignet für Detail-Panel (pro Klick aufgerufen).
+
+    Returns:
+        GrowthMetrics oder None wenn keine Historiedaten vorhanden.
+    """
+    current_year = str(date.today().year)
+
+    query = """
+        SELECT
+            strftime('%Y', ex_date) AS yr,
+            SUM(amount_micro)       AS total
+        FROM dividend_history
+        WHERE
+            isin = :isin
+            AND ex_date >= date('now', :neg_years)
+            AND strftime('%Y', ex_date) < :current_year
+        GROUP BY yr
+        ORDER BY yr ASC
+    """
+
+    try:
+        with _get_connection(db_path) as conn:
+            rows = conn.execute(query, {
+                "isin":         isin,
+                "neg_years":    f"-{_GROWTH_HISTORY_YEARS} years",
+                "current_year": current_year,
+            }).fetchall()
+    except sqlite3.Error:
+        logger.exception("Fehler beim Laden der Wachstumsmetriken für %s.", isin)
+        return None
+
+    if not rows:
+        return None
+
+    year_data = [(row["yr"], row["total"]) for row in rows]
+    return _compute_growth_metrics(year_data)
 
 
 # ── Verbindung ────────────────────────────────────────────────────────────────
@@ -98,7 +259,6 @@ def set_skip_until(
     skip_days: int = _SKIP_DAYS,
     db_path: Path = DB_PATH,
 ) -> None:
-    """Setzt skip_until auf heute + skip_days (18-Monats-Regel)."""
     skip_date = (date.today() + timedelta(days=skip_days)).isoformat()
     now = datetime.now().isoformat()
     with _get_connection(db_path) as conn:
@@ -128,7 +288,6 @@ def record_threshold_crossing(
     direction: str,
     db_path: Path = DB_PATH,
 ) -> None:
-    """Speichert eine 10 %-Schwellwert-Überschreitung."""
     with _get_connection(db_path) as conn:
         conn.execute(
             """
@@ -150,7 +309,6 @@ def mark_crossings_shown(
     crossing_ids: list[int],
     db_path: Path = DB_PATH,
 ) -> None:
-    """Markiert Überschreitungen als im GUI angezeigt."""
     if not crossing_ids:
         return
     now = datetime.now().isoformat()
@@ -166,16 +324,8 @@ def insert_history(
     payments: list[DividendPayment],
     db_path: Path = DB_PATH,
 ) -> int:
-    """
-    Fügt Dividenden-Einzelzahlungen ein. Duplikate (isin + ex_date) werden
-    ignoriert.
-
-    Returns:
-        Anzahl neu eingefügter Zahlungen.
-    """
     if not payments:
         return 0
-
     inserted = 0
     with _get_connection(db_path) as conn:
         for payment in payments:
@@ -195,7 +345,6 @@ def insert_history(
             )
             inserted += cursor.rowcount
         conn.commit()
-
     logger.debug(
         "%d neue Zahlungen eingefügt (%d ignoriert).",
         inserted, len(payments) - inserted,
@@ -209,19 +358,15 @@ def get_snapshot(
     isin: str,
     db_path: Path = DB_PATH,
 ) -> DividendSnapshot | None:
-    """Lädt einen DividendSnapshot aus der DB."""
     with _get_connection(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM dividend_data WHERE isin = ?", (isin,)
         ).fetchone()
-
     if not row:
         return None
-
     last_ex = (
         date.fromisoformat(row["last_ex_date"])
-        if row["last_ex_date"]
-        else None
+        if row["last_ex_date"] else None
     )
     return DividendSnapshot(
         isin=row["isin"],
@@ -240,23 +385,16 @@ def get_isins_due_for_update(
     limit: int = 100,
     interval_hours: int = _UPDATE_INTERVAL_HOURS,
 ) -> list[str]:
-    """
-    Gibt ISINs zurück die für ein Update fällig sind:
-    - Noch nie aktualisiert ODER updated_at älter als interval_hours
-    - UND skip_until ist NULL oder bereits vergangen
-    - UND kein unresolvable-Eintrag in ticker_mapping (spart sinnlose Calls)
-    """
     cutoff = (
         datetime.now() - timedelta(hours=interval_hours)
     ).isoformat()
     today = date.today().isoformat()
-
     with _get_connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT i.isin
             FROM instruments i
-            LEFT JOIN dividend_data d ON i.isin = d.isin
+            LEFT JOIN dividend_data d  ON i.isin = d.isin
             LEFT JOIN ticker_mapping tm ON i.isin = tm.isin
             WHERE
                 (d.isin IS NULL OR d.updated_at < ?)
@@ -277,11 +415,11 @@ def get_isins_due_for_update(
         ).fetchall()
     return [row["isin"] for row in rows]
 
+
 def get_isins_without_dividend_data(
     db_path: Path = DB_PATH,
     limit: int = 100,
 ) -> list[str]:
-    """Gibt ISINs ohne jegliche Dividendendaten zurück (für manuellen Batch)."""
     with _get_connection(db_path) as conn:
         rows = conn.execute(
             """
@@ -298,7 +436,6 @@ def get_isins_without_dividend_data(
 def get_unshown_threshold_crossings(
     db_path: Path = DB_PATH,
 ) -> list[dict]:
-    """Gibt noch nicht angezeigte Schwellwert-Überschreitungen zurück."""
     with _get_connection(db_path) as conn:
         rows = conn.execute(
             """
@@ -319,15 +456,7 @@ def has_recent_dividends(
     months: int = _NO_DIV_MONTHS,
     db_path: Path = DB_PATH,
 ) -> bool:
-    """
-    Prüft ob in den letzten `months` Monaten eine Dividende geflossen ist.
-    Basis: dividend_history.
-
-    Verwendet dateutil.relativedelta für präzise Monatsberechnung
-    (verhindert Fehler bei Monaten unterschiedlicher Länge).
-    """
     cutoff = (date.today() - relativedelta(months=months)).isoformat()
-
     with _get_connection(db_path) as conn:
         row = conn.execute(
             """
