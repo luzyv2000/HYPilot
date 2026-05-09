@@ -1,5 +1,5 @@
 # Dateiname:     ingestion/auto_dividend_update.py
-# Version:       2026-05-08-fix1
+# Version:       2026-05-09-fix1
 # Abhängigkeiten (intern): core.dividend_service, core.email_service,
 #                          db.dividend_repository
 # Abhängigkeiten (extern): keine
@@ -21,6 +21,10 @@ Wird gestartet von:
 Kapazitätsplanung:
   _TOTAL_PER_RUN = 3500 → ~117 Min pro Lauf bei ~2s/ISIN
   2 Läufe/Tag × 3500 = 7000 ISINs → deckt gesamtes fälliges Universum ab
+
+Fehlerbehandlung:
+  send_batch_summary und _save_run_summary werden in try/except gekapselt —
+  ein E-Mail- oder DB-Fehler darf den Daemon nicht zum Absturz bringen.
 """
 
 from __future__ import annotations
@@ -45,7 +49,7 @@ from db.dividend_repository import (
 LOG_DIR  = Path("/home/luzy/workspace/openclaw-min/logs")
 LOG_FILE = LOG_DIR / "auto_dividend.log"
 
-_TOTAL_PER_RUN = 3500   # War: 500 (konservativer Startwert)
+_TOTAL_PER_RUN = 3500
 _BATCH_SIZE    = 100
 
 
@@ -111,7 +115,6 @@ def main() -> int:
         processed += stats["processed"]
 
         if stats["processed"] < remaining:
-            # Keine weiteren fälligen ISINs — frühzeitig beenden
             logger.info(
                 "Keine weiteren fälligen ISINs nach %d verarbeiteten.",
                 processed,
@@ -129,15 +132,21 @@ def main() -> int:
     crossings = get_unshown_threshold_crossings()
     logger.info("%d neue Schwellwert-Überschreitungen.", len(crossings))
 
-    # E-Mail
-    send_batch_summary(
-        stats=total_stats,
-        crossings=crossings,
-        run_label=run_label,
-    )
+    # E-Mail — Fehler darf Daemon nicht beenden
+    try:
+        send_batch_summary(
+            stats=total_stats,
+            crossings=crossings,
+            run_label=run_label,
+        )
+    except Exception as exc:
+        logger.error("E-Mail-Versand fehlgeschlagen: %s", exc)
 
-    # In metadata speichern
-    _save_run_summary(total_stats, crossings)
+    # In metadata speichern — Fehler darf Daemon nicht beenden
+    try:
+        _save_run_summary(total_stats, crossings)
+    except Exception as exc:
+        logger.error("Run-Summary konnte nicht gespeichert werden: %s", exc)
 
     logger.info("=" * 60)
     logger.info("ENDE: %s", run_label)
