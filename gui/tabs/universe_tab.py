@@ -1,25 +1,14 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-05-08
+# Version:       2026-05-09-growth
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
-#                          core.dividend_service,
-#                          db.dividend_repository,
-#                          analysis.scorer
+#                          db.dividend_repository, analysis.scorer
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/universe_tab.py
+gui/tabs/universe_tab.py — TR-Universum-Tab.
 
-TR-Universum-Tab mit Batch-Dividenden-Update, manueller Namensänderung,
-Score-Spalte und Score-Detail-Panel.
-
-Grid-Layout:
-  Row 0: Toolbar
-  Row 1: Fortschrittsbalken (bedingt)
-  Row 2: InstrumentTable (weight=1, füllt restlichen Platz)
-  Row 3: ScoreDetailPanel (feste Höhe ~160px)
-
-Row-Format (6 Elemente):
-  (flag, name, isin_wkn, div_display, score_display, isin_raw)
+Neu 2026-05-09: _load_instruments() ruft get_growth_metrics_bulk() einmal
+auf und übergibt GrowthMetrics pro ISIN an score_dividend_snapshot().
 """
 
 from __future__ import annotations
@@ -84,11 +73,14 @@ def _format_score(score_total: int, rating: str) -> str:
 
 def _load_instruments() -> list[Row]:
     """
-    Lädt alle Instrumente aus der DB und berechnet Scores.
-    Läuft im Hintergrund-Thread — kein Netzwerk-Zugriff.
+    Lädt alle Instrumente + Wachstumsmetriken aus der DB.
+    GrowthMetrics werden einmal bulk-geladen, nicht pro ISIN.
     """
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
+    from db.dividend_repository import get_growth_metrics_bulk
+
+    growth_map = get_growth_metrics_bulk(db_path=DB_PATH)
 
     rows: list[Row] = []
     try:
@@ -104,8 +96,7 @@ def _load_instruments() -> list[Row]:
                     try:
                         last_ex = (
                             date.fromisoformat(db_row["last_ex_date"])
-                            if db_row["last_ex_date"]
-                            else None
+                            if db_row["last_ex_date"] else None
                         )
                         snapshot = DividendSnapshot(
                             isin=db_row["isin"],
@@ -117,12 +108,12 @@ def _load_instruments() -> list[Row]:
                             payout_ratio_bps=db_row["payout_ratio_bps"],
                             data_source=db_row["data_source"] or "yfinance",
                         )
-                        score = score_dividend_snapshot(snapshot)
+                        metrics = growth_map.get(db_row["isin"])
+                        score   = score_dividend_snapshot(snapshot, growth_metrics=metrics)
                         score_display = _format_score(score.total, score.rating)
                     except Exception:
                         logger.debug(
-                            "Score-Berechnung fehlgeschlagen für %s.",
-                            db_row["isin"],
+                            "Score fehlgeschlagen für %s.", db_row["isin"]
                         )
 
                 rows.append((
@@ -148,25 +139,18 @@ class UniverseTab(ctk.CTkFrame):
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
-
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
         self._batch_running = False
         self._stop_event    = threading.Event()
         self._progress_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
-
         self._build_toolbar()
         self._build_progress_bar()
         self._build_table()
         self._build_detail_panel()
-
         self._table.load_data(_load_instruments)
         self._refresh_pending_badge()
-
         self.after(200, self._process_progress_queue)
-
-    # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -205,8 +189,7 @@ class UniverseTab(ctk.CTkFrame):
 
         self._batch_btn = ctk.CTkButton(
             bar,
-            text="⬇  Dividenden laden",
-            width=175,
+            text="⬇  Dividenden laden", width=175,
             fg_color=("green4", "#2d6a2d"),
             hover_color=("green3", "#3a8a3a"),
             command=self._toggle_batch,
@@ -231,25 +214,20 @@ class UniverseTab(ctk.CTkFrame):
             row=1, column=0, sticky="ew", padx=8, pady=(4, 0)
         )
         self._progress_frame.grid_columnconfigure(1, weight=1)
-
         self._progress_label = ctk.CTkLabel(
             self._progress_frame, text="", anchor="w", width=200,
         )
         self._progress_label.grid(row=0, column=0, padx=(0, 8), sticky="w")
-
         self._progress_bar = ctk.CTkProgressBar(
             self._progress_frame, mode="determinate"
         )
         self._progress_bar.set(0)
         self._progress_bar.grid(row=0, column=1, sticky="ew")
-
         self._progress_detail = ctk.CTkLabel(
             self._progress_frame, text="",
-            text_color=("gray50", "gray60"),
-            anchor="e", width=220,
+            text_color=("gray50", "gray60"), anchor="e", width=220,
         )
         self._progress_detail.grid(row=0, column=2, padx=(8, 0), sticky="e")
-
         self._progress_frame.grid_remove()
 
     def _build_table(self) -> None:
@@ -259,25 +237,15 @@ class UniverseTab(ctk.CTkFrame):
         self._table.set_select_callback(self._on_instrument_selected)
 
     def _build_detail_panel(self) -> None:
-        """Score-Detail-Panel unterhalb der Tabelle."""
-        # Trennlinie
         ctk.CTkFrame(
             self, height=1, fg_color=("gray75", "gray30")
         ).grid(row=3, column=0, sticky="ew", padx=0)
-
         self._detail_panel = ScoreDetailPanel(self, height=160)
-        self._detail_panel.grid(
-            row=4, column=0, sticky="ew", padx=0, pady=0
-        )
+        self._detail_panel.grid(row=4, column=0, sticky="ew", padx=0, pady=0)
         self._detail_panel.grid_propagate(False)
 
-    # ── Selektion → Detail-Panel ──────────────────────────────────────────────
-
     def _on_instrument_selected(self, isin: str) -> None:
-        """Callback von InstrumentTable bei Selektion."""
         self._detail_panel.update(isin)
-
-    # ── Namensänderung ────────────────────────────────────────────────────────
 
     def _on_row_double_click(self, isin: str) -> None:
         from gui.widgets.name_edit_dialog import NameEditDialog
@@ -302,8 +270,6 @@ class UniverseTab(ctk.CTkFrame):
             self._pending_btn.pack(side="left", padx=(0, 8))
         else:
             self._pending_btn.pack_forget()
-
-    # ── Batch-Update ──────────────────────────────────────────────────────────
 
     def _toggle_batch(self) -> None:
         if self._batch_running:
@@ -398,8 +364,6 @@ class UniverseTab(ctk.CTkFrame):
             state="normal",
         )
 
-    # ── Filter ────────────────────────────────────────────────────────────────
-
     def _refresh(self) -> None:
         self._detail_panel.clear()
         self._table.load_data(_load_instruments)
@@ -411,7 +375,6 @@ class UniverseTab(ctk.CTkFrame):
         category    = self._category_var.get()
         div_only    = self._div_only_var.get()
         scored_only = self._scored_only_var.get()
-
         from analysis.rules import classify_instrument
 
         def filtered_loader() -> list[Row]:
