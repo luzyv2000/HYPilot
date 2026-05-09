@@ -1,12 +1,17 @@
 # Dateiname:     tests/test_analysis/test_scorer_growth.py
-# Version:       2026-05-09
+# Version:       2026-05-09-fix1
 # Abhängigkeiten (intern): analysis.scorer, db.dividend_repository
 # Abhängigkeiten (extern): pytest
 """
 tests/test_analysis/test_scorer_growth.py
 
 Tests für _score_stability_from_history() und GrowthMetrics-Integration.
-Bestehende test_scorer.py bleibt unverändert — alle Proxy-Tests grün.
+
+Fix 2026-05-09-fix1:
+  - test_1_year_gives_3_data_points: korrigiert auf 6 Punkte
+    (1yr=3 + neutral_growth=3 + no_cut_skipped=0)
+  - test_cut_note_contains_warning: prüft auf "erkannt" statt "Kürzung"
+    (vermeidet ü-Encoding-Probleme in CI)
 """
 
 from __future__ import annotations
@@ -17,7 +22,6 @@ from pathlib import Path
 import pytest
 
 from analysis.scorer import (
-    DividendScore,
     _score_stability_from_history,
     score_dividend_snapshot,
 )
@@ -65,19 +69,23 @@ class TestScoreStabilityFromHistory:
 
     def test_3_years_gives_10_data_points(self) -> None:
         pts, _ = _score_stability_from_history(_metrics(3, None, False))
-        assert pts >= 10
+        # 3yr=10 + neutral_growth=3 + no_cut=5
+        assert pts == 18
 
     def test_2_years_gives_6_data_points(self) -> None:
-        pts, notes = _score_stability_from_history(_metrics(2, 0.05, False))
-        assert pts == 6 + 10 + 5   # 2yr + strong growth + no cut
+        pts, _ = _score_stability_from_history(_metrics(2, 0.05, False))
+        # 2yr=6 + strong_growth=10 + no_cut=5
+        assert pts == 21
 
     def test_1_year_gives_3_data_points(self) -> None:
         pts, _ = _score_stability_from_history(_metrics(1, None, False))
-        assert pts == 3   # 1yr (3) + no growth data (3) + no cut bonus skipped
+        # 1yr=3 + no_yoy_neutral=3 + no_cut_bonus_skipped (years<2)
+        assert pts == 6
 
-    def test_0_years_gives_0_data_points(self) -> None:
+    def test_0_years_gives_neutral_growth_only(self) -> None:
         pts, _ = _score_stability_from_history(_metrics(0, None, False))
-        assert pts == 0 + 3   # 0yr + neutral growth
+        # 0yr=0 + neutral_growth=3 + no_cut_bonus_skipped (years<2)
+        assert pts == 3
 
     def test_strong_growth_gives_10_growth_points(self) -> None:
         pts, notes = _score_stability_from_history(_metrics(3, 0.10, False))
@@ -86,32 +94,41 @@ class TestScoreStabilityFromHistory:
 
     def test_positive_growth_gives_6_growth_points(self) -> None:
         pts, notes = _score_stability_from_history(_metrics(3, 0.02, False))
-        assert pts == 10 + 6 + 5   # 3yr + positive growth + no cut
+        # 3yr=10 + positive=6 + no_cut=5
+        assert pts == 21
         assert any("positiv" in n for n in notes)
 
     def test_zero_growth_gives_3_growth_points(self) -> None:
         pts, notes = _score_stability_from_history(_metrics(3, 0.0, False))
-        assert pts == 10 + 3 + 5
+        # 3yr=10 + stable=3 + no_cut=5
+        assert pts == 18
         assert any("stabil" in n.lower() for n in notes)
 
     def test_negative_growth_gives_0_growth_points(self) -> None:
         pts, notes = _score_stability_from_history(_metrics(3, -0.05, False))
-        assert pts == 10 + 0 + 5
+        # 3yr=10 + negative=0 + no_cut=5
+        assert pts == 15
         assert any("gesunken" in n for n in notes)
 
     def test_no_yoy_data_gives_3_neutral_points(self) -> None:
-        pts, notes = _score_stability_from_history(_metrics(1, None, False))
-        assert any("wenig" in n.lower() or "neutral" in n.lower()
-                   or "Wachstum" in n for n in notes)
+        _, notes = _score_stability_from_history(_metrics(3, None, False))
+        assert any("wenig" in n.lower() or "Wachstum" in n for n in notes)
 
     def test_cut_detected_gives_no_bonus(self) -> None:
-        pts_no_cut  = _score_stability_from_history(_metrics(3, 0.05, False))[0]
-        pts_cut     = _score_stability_from_history(_metrics(3, 0.05, True))[0]
+        pts_no_cut = _score_stability_from_history(_metrics(3, 0.05, False))[0]
+        pts_cut    = _score_stability_from_history(_metrics(3, 0.05, True))[0]
         assert pts_no_cut - pts_cut == 5
 
     def test_cut_note_contains_warning(self) -> None:
+        """Kürzungswarnung muss in den Notizen vorhanden sein."""
         _, notes = _score_stability_from_history(_metrics(3, 0.05, True))
-        assert any("Kürzung" in n for n in notes)
+        # Prüfung auf "erkannt" statt "Kürzung" — vermeidet ü-Encoding-Probleme in CI
+        assert any("erkannt" in n for n in notes)
+
+    def test_no_cut_note_positive(self) -> None:
+        """Keine Kürzung → positive Bestätigung in Notizen."""
+        _, notes = _score_stability_from_history(_metrics(3, 0.05, False))
+        assert any("Keine" in n for n in notes)
 
     def test_max_is_25(self) -> None:
         pts, _ = _score_stability_from_history(_metrics(10, 1.0, False))
@@ -121,23 +138,22 @@ class TestScoreStabilityFromHistory:
         pts, _ = _score_stability_from_history(_metrics(0, -0.5, True))
         assert pts >= 0
 
+    def test_points_are_integer(self) -> None:
+        pts, _ = _score_stability_from_history(_metrics(3, 0.05, False))
+        assert isinstance(pts, int)
+
 
 # ── score_dividend_snapshot: Integration ─────────────────────────────────────
 
 @pytest.mark.unit
 class TestScoreDividendSnapshotWithGrowth:
 
-    def test_with_growth_metrics_differs_from_proxy(self) -> None:
-        """Score mit echten Metriken kann vom Proxy-Score abweichen."""
-        snap    = _snapshot()
-        proxy   = score_dividend_snapshot(snap)
-        with_gm = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.05))
-        # Beide sind gültige Scores — sie müssen nicht gleich sein
-        assert 0 <= proxy.total   <= 100
-        assert 0 <= with_gm.total <= 100
+    def test_with_growth_metrics_is_valid_score(self) -> None:
+        snap   = _snapshot()
+        result = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.05))
+        assert 0 <= result.total <= 100
 
     def test_growth_metrics_none_uses_proxy(self) -> None:
-        """Ohne growth_metrics: Proxy-Fallback."""
         snap   = _snapshot()
         result = score_dividend_snapshot(snap, growth_metrics=None)
         assert result is not None
@@ -153,30 +169,21 @@ class TestScoreDividendSnapshotWithGrowth:
         result = score_dividend_snapshot(snap, growth_metrics=_metrics())
         assert 0 <= result.total <= 100
 
-    def test_strong_history_improves_score(self) -> None:
-        """
-        Instrument mit starker Geschichte (3 Jahre, 5%+ Wachstum, keine Kürzung)
-        muss mindestens so gut abschneiden wie dasselbe ohne Historiendaten.
-        """
-        snap       = _snapshot()
-        no_history = score_dividend_snapshot(snap, growth_metrics=None)
-        strong     = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.08))
-        # strong_history kann höher oder gleich sein — aber nie niedriger
-        # als ein 0-Punkte-Proxy (der bei fehlendem yield_bps 0 gibt)
-        assert strong.total >= 0
+    def test_total_equals_sum_of_subscores(self) -> None:
+        snap   = _snapshot()
+        result = score_dividend_snapshot(snap, growth_metrics=_metrics())
+        assert result.total == (
+            result.yield_points + result.frequency_points
+            + result.stability_points + result.payout_points
+        )
 
     def test_notes_contain_history_info(self) -> None:
-        """Notizen sollen historienbasierte Informationen enthalten."""
         snap   = _snapshot()
         result = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.07))
         all_notes = " ".join(result.notes)
         assert "Jahre" in all_notes or "Wachstum" in all_notes
 
     def test_backward_compat_existing_tests_unaffected(self) -> None:
-        """
-        Bestehende Tests die score_dividend_snapshot ohne growth_metrics
-        aufrufen dürfen nicht brechen.
-        """
         snap   = _snapshot()
         result = score_dividend_snapshot(snap)
         assert result.isin == "US0000000000"
@@ -184,6 +191,12 @@ class TestScoreDividendSnapshotWithGrowth:
             result.yield_points + result.frequency_points
             + result.stability_points + result.payout_points
         )
+
+    def test_cut_in_history_reduces_score(self) -> None:
+        snap    = _snapshot()
+        no_cut  = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.05, False))
+        with_cut = score_dividend_snapshot(snap, growth_metrics=_metrics(3, 0.05, True))
+        assert no_cut.total > with_cut.total
 
 
 # ── get_growth_metrics_bulk: Integration ─────────────────────────────────────
@@ -199,7 +212,6 @@ class TestGetGrowthMetricsBulk:
     def test_empty_history_returns_empty_dict(
         self, db_with_instruments: Path
     ) -> None:
-        """Keine dividend_history → leeres Dict."""
         from db.dividend_repository import get_growth_metrics_bulk
         result = get_growth_metrics_bulk(db_path=db_with_instruments)
         assert len(result) == 0
@@ -208,10 +220,8 @@ class TestGetGrowthMetricsBulk:
         self, db_with_instruments: Path
     ) -> None:
         import sqlite3
-        from datetime import date
         from db.dividend_repository import get_growth_metrics_bulk
 
-        # Drei Jahre Zahlungen für Realty Income eintragen
         with sqlite3.connect(db_with_instruments) as conn:
             conn.executemany(
                 "INSERT OR IGNORE INTO dividend_history "
@@ -230,7 +240,7 @@ class TestGetGrowthMetricsBulk:
         metrics = result["US7561091049"]
         assert metrics.years_of_data >= 2
         assert metrics.yoy_growth is not None
-        assert metrics.yoy_growth > Decimal("0")   # Wachstum erkannt
+        assert metrics.yoy_growth > Decimal("0")
         assert not metrics.has_cut
 
 
@@ -270,7 +280,6 @@ class TestGetGrowthMetrics:
         assert result.years_of_data >= 1
 
     def test_cut_detected(self, db_with_instruments: Path) -> None:
-        """Sinkende Jahressumme → has_cut=True."""
         import sqlite3
         from db.dividend_repository import get_growth_metrics
 
@@ -281,7 +290,7 @@ class TestGetGrowthMetrics:
                 "VALUES (?, ?, ?, ?, ?)",
                 [
                     ("US7561091049", "2023-06-15", 500_000, "USD", "test"),
-                    ("US7561091049", "2024-06-15", 300_000, "USD", "test"),  # Kürzung
+                    ("US7561091049", "2024-06-15", 300_000, "USD", "test"),
                 ],
             )
             conn.commit()
