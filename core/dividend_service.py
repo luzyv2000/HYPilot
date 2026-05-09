@@ -1,8 +1,7 @@
 # Dateiname:     core/dividend_service.py
-# Version:       2026-05-08-cascade
+# Version:       2026-05-09
 # Abhängigkeiten (intern): core.dividend_source, core.ticker_resolver,
 #                          core.sources.divvydiary_source,
-#                          core.sources.boerse_frankfurt_source,
 #                          core.sources.yfinance_source,
 #                          db.dividend_repository
 # Abhängigkeiten (extern): keine
@@ -12,9 +11,15 @@ core/dividend_service.py
 Orchestriert den Dividenden-Datenabruf via Multi-Source-Kaskade.
 
 Kaskaden-Reihenfolge (sequenziell, erste Non-None-Antwort gewinnt):
-  1. DivvyDiary REST-API    — beste Qualität EU-Titel, benötigt API-Key
-  2. Boerse Frankfurt Feed  — gut für Xetra-Titel (DE/AT/CH/FR/NL)
-  3. yfinance               — breite Abdeckung, Fallback
+  1. DivvyDiary REST-API  — beste Qualität EU-Titel, benötigt API-Key.
+                            Ohne DIVVYDIARY_API_KEY in .env wird diese
+                            Quelle still übersprungen.
+  2. yfinance             — breite Abdeckung, bewährter Fallback.
+                            Erfordert aufgelösten Ticker aus ticker_resolver.
+
+Bewusst NICHT in der Kaskade:
+  boerse_frankfurt — API erfordert interne IDs, kein öffentlicher Zugang.
+                     Siehe core/sources/boerse_frankfurt_source.py.
 
 Quelle wird in dividend_data.data_source protokolliert.
 
@@ -34,7 +39,6 @@ from typing import Callable
 
 from core.dividend_source import DividendSnapshot
 from core.sources.divvydiary_source import DivvyDiarySource
-from core.sources.boerse_frankfurt_source import BoerseFrankfurtSource
 from core.sources.yfinance_source import YFinanceSource
 from core import ticker_resolver
 from db import dividend_repository
@@ -42,9 +46,17 @@ from db import dividend_repository
 logger = logging.getLogger(__name__)
 
 # Quellen-Singletons — einmal instanziiert beim Modul-Import
-_DIVVYDIARY        = DivvyDiarySource()
-_BOERSE_FRANKFURT  = BoerseFrankfurtSource()
-_YFINANCE          = YFinanceSource()
+_DIVVYDIARY = DivvyDiarySource()
+_YFINANCE   = YFinanceSource()
+
+# Kaskade: Reihenfolge ist entscheidend.
+# Eintrag: (source_instance, isin_native: bool)
+#   isin_native=True  → fetch_snapshot(isin, ticker="")
+#   isin_native=False → fetch_snapshot(isin, ticker) — überspringen wenn kein Ticker
+_CASCADE_SOURCES = [
+    (_DIVVYDIARY, True),
+    (_YFINANCE,   False),
+]
 
 HIGH_YIELD_THRESHOLD = Decimal("0.10")
 _HIGH_YIELD_BPS      = 1000
@@ -62,33 +74,28 @@ def _cascade_fetch_snapshot(
 ) -> DividendSnapshot | None:
     """
     Versucht Dividenden-Snapshot sequenziell über alle konfigurierten Quellen.
-    Erste Non-None-Antwort gewinnt. Alle Quellen werden bei Fehler still
-    übersprungen — kein harter Abbruch.
+    Erste Non-None-Antwort gewinnt.
 
     Args:
         isin:    ISIN des Instruments
         ticker:  Aufgelöster Ticker (wird nur von yfinance benötigt)
-        db_path: Pfad zur SQLite-DB
+        db_path: Pfad zur SQLite-DB (für zukünftige Source-Caching-Logik)
 
     Returns:
         DividendSnapshot der ersten erfolgreichen Quelle, oder None.
     """
-    sources = [
-        (_DIVVYDIARY,       isin,   ""),            # ISIN-nativ
-        (_BOERSE_FRANKFURT, isin,   ""),            # ISIN-nativ
-        (_YFINANCE,         isin,   ticker or ""),  # Ticker benötigt
-    ]
-
-    for source, src_isin, src_ticker in sources:
-        # yfinance überspringen wenn kein Ticker aufgelöst wurde
-        if source is _YFINANCE and not src_ticker:
+    for source, isin_native in _CASCADE_SOURCES:
+        if not isin_native and not ticker:
             logger.debug(
-                "Kaskade: yfinance für %s übersprungen — kein Ticker.", isin
+                "Kaskade: '%s' für %s übersprungen — kein Ticker.",
+                source.source_name, isin,
             )
             continue
 
+        src_ticker = "" if isin_native else (ticker or "")
+
         try:
-            snapshot = source.fetch_snapshot(src_isin, src_ticker)
+            snapshot = source.fetch_snapshot(isin, src_ticker)
             if snapshot is not None:
                 logger.info(
                     "Kaskade: %s → Quelle '%s' erfolgreich.",
@@ -103,6 +110,7 @@ def _cascade_fetch_snapshot(
             logger.debug(
                 "Kaskade: %s → '%s' fehlgeschlagen (Exception).",
                 isin, source.source_name,
+                exc_info=True,
             )
             continue
 
@@ -118,17 +126,14 @@ def _cascade_fetch_history(
     Holt Dividenden-Historie aus der ersten erfolgreichen Quelle.
     Reihenfolge identisch zur Snapshot-Kaskade.
     """
-    sources = [
-        (_DIVVYDIARY,       isin,   ""),
-        (_BOERSE_FRANKFURT, isin,   ""),
-        (_YFINANCE,         isin,   ticker or ""),
-    ]
-
-    for source, src_isin, src_ticker in sources:
-        if source is _YFINANCE and not src_ticker:
+    for source, isin_native in _CASCADE_SOURCES:
+        if not isin_native and not ticker:
             continue
+
+        src_ticker = "" if isin_native else (ticker or "")
+
         try:
-            history = source.fetch_history(src_isin, src_ticker)
+            history = source.fetch_history(isin, src_ticker)
             if history:
                 logger.debug(
                     "Kaskade Historie: %s → '%s' (%d Einträge).",
@@ -179,7 +184,7 @@ def update_dividend_data(
     """
     logger.info("Dividenden-Update: %s", isin)
 
-    # Ticker für yfinance auflösen (wird von ISIN-nativen Quellen ignoriert)
+    # Ticker für yfinance auflösen (von ISIN-nativen Quellen ignoriert)
     ticker = ticker_resolver.resolve(isin, db_path=db_path)
 
     # Vorherigen Wert für Schwellwert-Vergleich merken
@@ -314,16 +319,19 @@ def get_high_yield_instruments(
     min_yield: Decimal = HIGH_YIELD_THRESHOLD,
     db_path: Path = dividend_repository.DB_PATH,
 ) -> list[DividendSnapshot]:
+    """Gibt alle Instrumente mit Rendite >= min_yield zurück."""
     import sqlite3
     from datetime import date as date_type
+
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        min_bps = int(min_yield * 10000)
+        min_bps = int(min_yield * 10_000)
         rows = conn.execute(
             "SELECT * FROM dividend_data WHERE yield_bps >= ? "
             "ORDER BY yield_bps DESC",
             (min_bps,),
         ).fetchall()
+
     result = []
     for row in rows:
         last_ex = (
