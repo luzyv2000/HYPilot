@@ -1,5 +1,5 @@
 # Dateiname:     core/dividend_source.py
-# Version:       2026-05-08-cascade-fix1
+# Version:       2026-05-08-cascade-fix2
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine
 """
@@ -7,12 +7,13 @@ core/dividend_source.py
 
 Abstrakte Basisklasse und Datenmodelle für Dividenden-Datenquellen.
 
-Änderung 2026-05-08: ticker-Parameter in fetch_snapshot / fetch_history
-auf Default "" gesetzt — ermöglicht ISIN-native Quellen (DivvyDiary,
-boerse-frankfurt.de) ohne Dummy-Ticker-Übergabe.
-
-Änderung 2026-05-08-fix1: micro_to_decimal hinzugefügt —
-  271_000 micro → Decimal('0.271000').
+Änderungen:
+  2026-05-08         : ticker-Parameter optional (Default "")
+  2026-05-08-fix1    : micro_to_decimal hinzugefügt
+  2026-05-08-fix2    : float_to_bps rundet statt trunciert;
+                       DividendSnapshot erhält yield_percent-Property,
+                       meets_yield_threshold()-Methode und
+                       __post_init__-Validierung für frequency.
 
 Finanz-Konventionen:
   yield_bps        : INTEGER, Basispunkte (1% = 100 bps)
@@ -25,19 +26,31 @@ Alle Konvertierungen via decimal.Decimal — kein float.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+
+# ── Gültige Frequenz-Werte ────────────────────────────────────────────────────
+
+VALID_FREQUENCIES: frozenset[str] = frozenset({
+    "monthly", "quarterly", "semi_annual", "annual", "irregular",
+})
 
 
 # ── Konvertierungshilfen ──────────────────────────────────────────────────────
 
 def float_to_bps(value: float | None) -> int | None:
-    """float 0.055 → 550 bps. None-safe."""
+    """
+    float 0.055 → 550 bps. None-safe.
+    Verwendet ROUND_HALF_UP via Decimal um Truncation-Fehler zu vermeiden.
+    Beispiel: 0.10555 → 1056 (nicht 1055).
+    """
     if value is None:
         return None
     try:
-        return int(Decimal(str(value)) * 10_000)
+        d = Decimal(str(value)) * 10_000
+        return int(d.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     except (InvalidOperation, ValueError):
         return None
 
@@ -47,7 +60,8 @@ def float_to_micro(value: float | None) -> int | None:
     if value is None:
         return None
     try:
-        return int(Decimal(str(value)) * 1_000_000)
+        d = Decimal(str(value)) * 1_000_000
+        return int(d.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     except (InvalidOperation, ValueError):
         return None
 
@@ -70,7 +84,13 @@ def micro_to_decimal(micro: int | None) -> Decimal | None:
 
 @dataclass
 class DividendSnapshot:
-    """Aggregierte Dividenden-Kennzahlen für ein Instrument."""
+    """
+    Aggregierte Dividenden-Kennzahlen für ein Instrument.
+
+    Validierung in __post_init__:
+      frequency: Werte außerhalb von VALID_FREQUENCIES → None gesetzt.
+                 Verhindert ungültige Werte in der DB (chk_frequency-Constraint).
+    """
     isin:              str
     yield_bps:         int | None
     frequency:         str | None
@@ -80,10 +100,41 @@ class DividendSnapshot:
     payout_ratio_bps:  int | None
     data_source:       str
 
+    def __post_init__(self) -> None:
+        # Ungültige Frequenz-Werte auf None normalisieren
+        if self.frequency is not None and self.frequency not in VALID_FREQUENCIES:
+            self.frequency = None
+
+    # ── Abgeleitete Eigenschaften ─────────────────────────────────────────────
+
     @property
     def last_amount(self) -> Decimal | None:
-        """Betrag als Decimal (für Anzeige)."""
+        """Letzter Dividendenbetrag als Decimal (für Anzeige)."""
         return micro_to_decimal(self.last_amount_micro)
+
+    @property
+    def yield_percent(self) -> Decimal | None:
+        """
+        Rendite als Decimal-Prozentwert.
+        550 bps → Decimal('0.0550')
+        """
+        return bps_to_decimal(self.yield_bps)
+
+    def meets_yield_threshold(self, threshold: Decimal) -> bool:
+        """
+        Prüft ob die Rendite den angegebenen Schwellwert erreicht oder
+        überschreitet.
+
+        Args:
+            threshold: Schwellwert als Decimal (z.B. Decimal('0.10') für 10%)
+
+        Returns:
+            False wenn yield_bps None ist.
+        """
+        yp = self.yield_percent
+        if yp is None:
+            return False
+        return yp >= threshold
 
 
 @dataclass
