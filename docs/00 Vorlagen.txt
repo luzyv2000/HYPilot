@@ -14,16 +14,16 @@ Lass dir so viel Zeit wie du benötigst, und verteile deine Antwort, wenn du sie
 
 Hast du dazu noch Fragen, Hinweise oder Vorschläge?
 
-==============================================
+======= Sitzungsbeginn, Start ================
 
 cd /home/luzy/workspace/openclaw-min
 source venv/bin/activate
 
-==============================================
+======= Markdown =============================
 
 (venv) luzy@luzy-NucBox-K8-Plus:~/Dokumente$ pandoc xy.odt -t markdown -o xy.md
 
-==============================================
+======= Commit ===============================
 
 git add -A
 git commit -m "fix: KOMMENTAR"
