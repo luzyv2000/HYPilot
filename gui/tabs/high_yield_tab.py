@@ -1,12 +1,11 @@
 # Dateiname:     gui/tabs/high_yield_tab.py
-# Version:       2026-05-09-growth
+# Version:       2026-05-09-watchlist
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
-#                          analysis.scorer, db.dividend_repository
+#                          db.watchlist_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/high_yield_tab.py — High-Yield-Tab (≥ 10 %).
-Neu 2026-05-09: GrowthMetrics bulk-geladen für historienbasiertes Scoring.
+gui/tabs/high_yield_tab.py — Neu: Watchlist-Button in der Toolbar.
 """
 
 from __future__ import annotations
@@ -66,7 +65,6 @@ def _format_score(score_total: int, rating: str) -> str:
 
 
 def _load_high_yield() -> list[Row]:
-    """Lädt High-Yield-Instrumente mit historienbasiertem Scoring."""
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
     from db.dividend_repository import get_growth_metrics_bulk
@@ -127,16 +125,21 @@ class HighYieldTab(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        self._raw_rows: list[Row] = []
-        self._raw_lock = threading.Lock()
+        self._raw_rows:     list[Row] = []
+        self._raw_lock      = threading.Lock()
+        self._watchlist_tab = None
         self._build_toolbar()
         self._build_table()
         self._build_detail_panel()
         self._table.load_data(self._loader_with_cache)
 
+    def set_watchlist_tab(self, tab: Any) -> None:
+        self._watchlist_tab = tab
+
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
+
         ctk.CTkLabel(
             bar,
             text="Instrumente mit Dividendenrendite ≥ 10 %",
@@ -144,10 +147,12 @@ class HighYieldTab(ctk.CTkFrame):
             text_color=("gray30", "gray80"),
             anchor="w",
         ).pack(side="left", padx=(0, 16))
+
         ctk.CTkButton(
             bar, text="↻  Aktualisieren", width=140,
             command=self._refresh,
         ).pack(side="left", padx=(0, 8))
+
         ctk.CTkButton(
             bar,
             text="📥  CSV exportieren", width=160,
@@ -155,6 +160,19 @@ class HighYieldTab(ctk.CTkFrame):
             hover_color=("gray60", "gray40"),
             command=self._export_csv,
         ).pack(side="left", padx=(0, 8))
+
+        # ── Watchlist-Button ──────────────────────────────────────────────────
+        self._watchlist_btn = ctk.CTkButton(
+            bar,
+            text="⭐  Watchlist",
+            width=140,
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray40"),
+            state="disabled",
+            command=self._add_to_watchlist,
+        )
+        self._watchlist_btn.pack(side="left", padx=(0, 8))
+
         self._count_label = ctk.CTkLabel(
             bar, text="",
             text_color=("gray45", "gray65"),
@@ -187,12 +205,33 @@ class HighYieldTab(ctk.CTkFrame):
         ))
         return rows
 
-    def _refresh(self) -> None:
-        self._detail_panel.clear()
-        self._table.load_data(self._loader_with_cache)
-
     def _on_instrument_selected(self, isin: str) -> None:
         self._detail_panel.update(isin)
+        self._watchlist_btn.configure(state="normal")
+
+    def _add_to_watchlist(self) -> None:
+        isin = self._table.get_selected_isin()
+        if not isin:
+            return
+        from db.watchlist_repository import add_to_watchlist
+        added = add_to_watchlist(isin, db_path=DB_PATH)
+        if added:
+            self._watchlist_btn.configure(text="✅  Hinzugefügt")
+            self.after(2000, lambda: self._watchlist_btn.configure(
+                text="⭐  Watchlist"
+            ))
+            if self._watchlist_tab:
+                self._watchlist_tab.reload()
+        else:
+            self._watchlist_btn.configure(text="⭐  Bereits vorhanden")
+            self.after(2000, lambda: self._watchlist_btn.configure(
+                text="⭐  Watchlist"
+            ))
+
+    def _refresh(self) -> None:
+        self._detail_panel.clear()
+        self._watchlist_btn.configure(state="disabled")
+        self._table.load_data(self._loader_with_cache)
 
     def _export_csv(self) -> None:
         with self._raw_lock:
@@ -214,9 +253,9 @@ class HighYieldTab(ctk.CTkFrame):
                 writer = csv.writer(f, delimiter=";")
                 writer.writerow(["Name", "ISIN", "WKN", "Rendite %", "Score"])
                 for row in rows:
-                    parts    = row[2].split("\n")
-                    isin_p   = parts[0]
-                    wkn_p    = parts[1] if len(parts) > 1 else ""
+                    parts  = row[2].split("\n")
+                    isin_p = parts[0]
+                    wkn_p  = parts[1] if len(parts) > 1 else ""
                     writer.writerow([
                         row[1].lstrip("✎ "), isin_p, wkn_p, row[3], row[4],
                     ])
