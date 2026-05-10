@@ -1,19 +1,11 @@
 # Dateiname:     gui/app.py
-# Version:       2026-05-09-analyse
+# Version:       2026-05-09-watchlist
 # Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab,
-#                          gui.tabs.analyse_tab
+#                          gui.tabs.analyse_tab, gui.tabs.watchlist_tab
 # Abhängigkeiten (extern): customtkinter
 """
-gui/app.py
-
-HYPilot Hauptfenster.
-
-Tabs:
-  - TR-Universum      : vollständiges Instrument-Universum
-  - High-Yield ≥10%   : vorgefilterter Datensatz + CSV-Export
-  - Analyse           : Scoring-Verteilung, Top-20, Wachstums-Highlights
-  - Watchlist         : Platzhalter
-  - Portfolio         : Platzhalter
+gui/app.py — Neu: WatchlistTab eingebunden,
+set_watchlist_tab() auf Universe- und HighYieldTab aufgerufen.
 """
 
 from __future__ import annotations
@@ -28,6 +20,7 @@ import customtkinter as ctk
 from gui.tabs.universe_tab   import UniverseTab
 from gui.tabs.high_yield_tab import HighYieldTab
 from gui.tabs.analyse_tab    import AnalyseTab
+from gui.tabs.watchlist_tab  import WatchlistTab
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +43,6 @@ class HYPilotApp(ctk.CTk):
         self._build_tab_view()
         self._build_status_bar()
         self.after(800, self._startup_checks)
-
-    # ── Geometrie ─────────────────────────────────────────────────────────────
 
     def _restore_geometry(self) -> None:
         try:
@@ -76,14 +67,12 @@ class HYPilotApp(ctk.CTk):
         except sqlite3.Error:
             logger.warning("Fenstergeometrie konnte nicht gespeichert werden.")
 
-    # ── Menüleiste ────────────────────────────────────────────────────────────
-
     def _build_menu_bar(self) -> None:
         bar = ctk.CTkFrame(self, height=36, corner_radius=0)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
         for label, command in {
-            "Datei": self._menu_datei,
+            "Datei":   self._menu_datei,
             "Ansicht": None,
             "Extras":  None,
             "Hilfe":   None,
@@ -99,36 +88,48 @@ class HYPilotApp(ctk.CTk):
     def _menu_datei(self) -> None:
         pass
 
-    # ── Tabs ──────────────────────────────────────────────────────────────────
-
     def _build_tab_view(self) -> None:
         self._tab_view = ctk.CTkTabview(self, corner_radius=4)
         self._tab_view.pack(fill="both", expand=True, padx=6)
 
+        # TR-Universum
         self._tab_view.add("TR-Universum")
-        UniverseTab(
+        self._universe_tab = UniverseTab(
             self._tab_view.tab("TR-Universum")
-        ).pack(fill="both", expand=True)
+        )
+        self._universe_tab.pack(fill="both", expand=True)
 
+        # High-Yield
         self._tab_view.add("High-Yield ≥10 %")
-        HighYieldTab(
+        self._high_yield_tab = HighYieldTab(
             self._tab_view.tab("High-Yield ≥10 %")
-        ).pack(fill="both", expand=True)
+        )
+        self._high_yield_tab.pack(fill="both", expand=True)
 
+        # Analyse
         self._tab_view.add("Analyse")
         AnalyseTab(
             self._tab_view.tab("Analyse")
         ).pack(fill="both", expand=True)
 
-        for name in ("Watchlist", "Portfolio"):
-            self._tab_view.add(name)
-            ctk.CTkLabel(
-                self._tab_view.tab(name),
-                text=f"{name} — in Entwicklung",
-                text_color=("gray50", "gray60"),
-            ).pack(expand=True)
+        # Watchlist
+        self._tab_view.add("Watchlist")
+        self._watchlist_tab = WatchlistTab(
+            self._tab_view.tab("Watchlist")
+        )
+        self._watchlist_tab.pack(fill="both", expand=True)
 
-    # ── Statusleiste ──────────────────────────────────────────────────────────
+        # Watchlist-Referenz an andere Tabs weitergeben
+        self._universe_tab.set_watchlist_tab(self._watchlist_tab)
+        self._high_yield_tab.set_watchlist_tab(self._watchlist_tab)
+
+        # Portfolio
+        self._tab_view.add("Portfolio")
+        ctk.CTkLabel(
+            self._tab_view.tab("Portfolio"),
+            text="Portfolio — in Entwicklung",
+            text_color=("gray50", "gray60"),
+        ).pack(expand=True)
 
     def _build_status_bar(self) -> None:
         bar = ctk.CTkFrame(self, height=26, corner_radius=0)
@@ -137,8 +138,7 @@ class HYPilotApp(ctk.CTk):
         self._status_label = ctk.CTkLabel(
             bar, text="",
             text_color=("gray45", "gray65"),
-            font=ctk.CTkFont(size=11),
-            anchor="w",
+            font=ctk.CTkFont(size=11), anchor="w",
         )
         self._status_label.pack(side="left", padx=10)
 
@@ -165,25 +165,17 @@ class HYPilotApp(ctk.CTk):
         except Exception:
             return ""
 
-    # ── Startup-Checks ────────────────────────────────────────────────────────
-
     def _startup_checks(self) -> None:
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
-
         try:
             from db.dividend_repository import get_unshown_threshold_crossings
             crossings = get_unshown_threshold_crossings()
         except Exception:
             logger.exception("Fehler beim Laden der Threshold-Crossings.")
             return
-
         if crossings:
-            logger.info(
-                "%d ungesehene Schwellwert-Überschreitungen — öffne Popup.",
-                len(crossings),
-            )
             self._open_threshold_popup()
 
     def _open_threshold_popup(self) -> None:
@@ -194,8 +186,6 @@ class HYPilotApp(ctk.CTk):
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
-
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def _on_close(self) -> None:
         self._save_geometry()
