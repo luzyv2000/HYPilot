@@ -1,14 +1,11 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-05-09-growth
+# Version:       2026-05-09-watchlist
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
-#                          db.dividend_repository, analysis.scorer
+#                          db.watchlist_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/universe_tab.py — TR-Universum-Tab.
-
-Neu 2026-05-09: _load_instruments() ruft get_growth_metrics_bulk() einmal
-auf und übergibt GrowthMetrics pro ISIN an score_dividend_snapshot().
+gui/tabs/universe_tab.py — Neu: Watchlist-Button in der Toolbar.
 """
 
 from __future__ import annotations
@@ -49,17 +46,12 @@ _QUERY = """
 """
 
 _RATING_SHORT = {
-    "STRONG_BUY": "SB",
-    "BUY":        "B",
-    "WATCH":      "W",
-    "REJECT":     "R",
+    "STRONG_BUY": "SB", "BUY": "B", "WATCH": "W", "REJECT": "R",
 }
 
 
 def _format_div(yield_bps: int | None) -> str:
-    if yield_bps is None:
-        return "—"
-    return f"{yield_bps / 100.0:.2f} %"
+    return "—" if yield_bps is None else f"{yield_bps / 100.0:.2f} %"
 
 
 def _format_isin_wkn(isin: str, wkn: str) -> str:
@@ -67,22 +59,17 @@ def _format_isin_wkn(isin: str, wkn: str) -> str:
 
 
 def _format_score(score_total: int, rating: str) -> str:
-    short = _RATING_SHORT.get(rating, rating[:1])
-    return f"{score_total} {short}"
+    return f"{score_total} {_RATING_SHORT.get(rating, rating[:1])}"
 
 
 def _load_instruments() -> list[Row]:
-    """
-    Lädt alle Instrumente + Wachstumsmetriken aus der DB.
-    GrowthMetrics werden einmal bulk-geladen, nicht pro ISIN.
-    """
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
     from db.dividend_repository import get_growth_metrics_bulk
 
     growth_map = get_growth_metrics_bulk(db_path=DB_PATH)
-
     rows: list[Row] = []
+
     try:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
@@ -112,9 +99,7 @@ def _load_instruments() -> list[Row]:
                         score   = score_dividend_snapshot(snapshot, growth_metrics=metrics)
                         score_display = _format_score(score.total, score.rating)
                     except Exception:
-                        logger.debug(
-                            "Score fehlgeschlagen für %s.", db_row["isin"]
-                        )
+                        logger.debug("Score fehlgeschlagen für %s.", db_row["isin"])
 
                 rows.append((
                     "",
@@ -139,18 +124,29 @@ class UniverseTab(ctk.CTkFrame):
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
+
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        self._batch_running = False
-        self._stop_event    = threading.Event()
+
+        self._batch_running  = False
+        self._stop_event     = threading.Event()
         self._progress_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._watchlist_tab  = None  # wird via set_watchlist_tab() gesetzt
+
         self._build_toolbar()
         self._build_progress_bar()
         self._build_table()
         self._build_detail_panel()
+
         self._table.load_data(_load_instruments)
         self._refresh_pending_badge()
         self.after(200, self._process_progress_queue)
+
+    def set_watchlist_tab(self, tab: Any) -> None:
+        """Referenz auf WatchlistTab für Reload nach Änderung."""
+        self._watchlist_tab = tab
+
+    # ── Layout ────────────────────────────────────────────────────────────────
 
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -184,8 +180,25 @@ class UniverseTab(ctk.CTkFrame):
             command=self._on_filter_change,
         ).pack(side="left", padx=(0, 8))
 
-        ctk.CTkFrame(bar, width=2, height=24,
-                     fg_color=("gray70", "gray40")).pack(side="left", padx=12)
+        ctk.CTkFrame(
+            bar, width=2, height=24, fg_color=("gray70", "gray40")
+        ).pack(side="left", padx=12)
+
+        # ── Watchlist-Button ──────────────────────────────────────────────────
+        self._watchlist_btn = ctk.CTkButton(
+            bar,
+            text="⭐  Watchlist",
+            width=140,
+            fg_color=("gray70", "gray30"),
+            hover_color=("gray60", "gray40"),
+            state="disabled",
+            command=self._add_to_watchlist,
+        )
+        self._watchlist_btn.pack(side="left", padx=(0, 8))
+
+        ctk.CTkFrame(
+            bar, width=2, height=24, fg_color=("gray70", "gray40")
+        ).pack(side="left", padx=12)
 
         self._batch_btn = ctk.CTkButton(
             bar,
@@ -196,8 +209,9 @@ class UniverseTab(ctk.CTkFrame):
         )
         self._batch_btn.pack(side="left", padx=(0, 8))
 
-        ctk.CTkFrame(bar, width=2, height=24,
-                     fg_color=("gray70", "gray40")).pack(side="left", padx=12)
+        ctk.CTkFrame(
+            bar, width=2, height=24, fg_color=("gray70", "gray40")
+        ).pack(side="left", padx=12)
 
         self._pending_btn = ctk.CTkButton(
             bar, text="", width=180,
@@ -244,8 +258,32 @@ class UniverseTab(ctk.CTkFrame):
         self._detail_panel.grid(row=4, column=0, sticky="ew", padx=0, pady=0)
         self._detail_panel.grid_propagate(False)
 
+    # ── Selektion → Detail-Panel + Watchlist-Button ───────────────────────────
+
     def _on_instrument_selected(self, isin: str) -> None:
         self._detail_panel.update(isin)
+        self._watchlist_btn.configure(state="normal")
+
+    def _add_to_watchlist(self) -> None:
+        isin = self._table.get_selected_isin()
+        if not isin:
+            return
+        from db.watchlist_repository import add_to_watchlist
+        added = add_to_watchlist(isin, db_path=DB_PATH)
+        if added:
+            self._watchlist_btn.configure(text="✅  Hinzugefügt")
+            self.after(2000, lambda: self._watchlist_btn.configure(
+                text="⭐  Watchlist"
+            ))
+            if self._watchlist_tab:
+                self._watchlist_tab.reload()
+        else:
+            self._watchlist_btn.configure(text="⭐  Bereits vorhanden")
+            self.after(2000, lambda: self._watchlist_btn.configure(
+                text="⭐  Watchlist"
+            ))
+
+    # ── Namensänderung ────────────────────────────────────────────────────────
 
     def _on_row_double_click(self, isin: str) -> None:
         from gui.widgets.name_edit_dialog import NameEditDialog
@@ -270,6 +308,8 @@ class UniverseTab(ctk.CTkFrame):
             self._pending_btn.pack(side="left", padx=(0, 8))
         else:
             self._pending_btn.pack_forget()
+
+    # ── Batch-Update ──────────────────────────────────────────────────────────
 
     def _toggle_batch(self) -> None:
         if self._batch_running:
@@ -364,8 +404,11 @@ class UniverseTab(ctk.CTkFrame):
             state="normal",
         )
 
+    # ── Filter ────────────────────────────────────────────────────────────────
+
     def _refresh(self) -> None:
         self._detail_panel.clear()
+        self._watchlist_btn.configure(state="disabled")
         self._table.load_data(_load_instruments)
 
     def _on_category_change(self, _: str) -> None:
@@ -393,4 +436,5 @@ class UniverseTab(ctk.CTkFrame):
             return result
 
         self._detail_panel.clear()
+        self._watchlist_btn.configure(state="disabled")
         self._table.load_data(filtered_loader)
