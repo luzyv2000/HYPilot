@@ -27,10 +27,14 @@ jobs:
 
     steps:
       - name: Repository auschecken
-        uses: actions/checkout@v4
+        # uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v5
+        # oder @v5 wenn verfügbar
+        # war: uses: actions/checkout@v4
 
       - name: Python 3.12 einrichten
-        uses: actions/setup-python@v5
+        # uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.12"
           cache: "pip"
@@ -75,7 +79,8 @@ jobs:
 
       - name: Testergebnisse hochladen
         if: always()
-        uses: actions/upload-artifact@v4
+        # uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: test-results
           path: |
