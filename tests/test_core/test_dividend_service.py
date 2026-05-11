@@ -1,5 +1,6 @@
 # Dateiname:     tests/test_core/test_dividend_service.py
-# Version:       2026-05-10
+# Version:       2026-05-10-fix1
+# — nur TestIsPlausible wird geändert, Rest der Datei identisch —
 # Abhängigkeiten (intern): core.dividend_service, core.dividend_source
 # Abhängigkeiten (extern): pytest
 """
@@ -75,6 +76,15 @@ class TestIsPlausible:
         """68177 bps (Leo Lithium) → klar nicht plausibel."""
         assert _is_plausible(_make_snapshot(68_177), "AU0000221251") is False
 
+    def test_100_percent_yield_is_implausible(self) -> None:
+        """
+        10000 bps (100%) → nicht plausibel.
+        Konami/yfinance-Wert war ein Datenfehler (Sonderausschüttung),
+        kein strukturelles JP-Marktmerkmal.
+        100% Dividendenrendite ist in keinem realen Markt dauerhaft möglich.
+        """
+        assert _is_plausible(_make_snapshot(10_000), "JP3300200007") is False
+
     def test_implausible_value_logs_warning(self, caplog) -> None:
         """Unplausibler Wert muss als WARNING geloggt werden."""
         import logging
@@ -83,10 +93,6 @@ class TestIsPlausible:
         assert any("68177" in r.message for r in caplog.records)
         assert any("AU0000221251" in r.message for r in caplog.records)
 
-    def test_typical_high_yield_etf_plausible(self) -> None:
-        """10000 bps (100%) — Konami/JP-Stil, noch unter Cap."""
-        assert _is_plausible(_make_snapshot(10_000), "JP3300200007") is True
-
     @pytest.mark.parametrize("bps,expected", [
         (0,              True),
         (550,            True),
@@ -94,7 +100,7 @@ class TestIsPlausible:
         (3_000,          True),
         (5_000,          True),   # exakt am Cap
         (5_001,          False),  # 1 bps über Cap
-        (10_000,         False),  # 100%
+        (10_000,         False),  # 100% — Datenfehler
         (36_855,         False),  # East West Minerals
         (68_177,         False),  # Leo Lithium
     ])
