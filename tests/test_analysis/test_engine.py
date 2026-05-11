@@ -1,5 +1,5 @@
 # Dateiname:     tests/test_analysis/test_engine.py
-# Version:       2026-04-30
+# Version:       2026-05-11
 # Abhängigkeiten (intern): analysis.engine, db.dividend_repository,
 #                           core.universe_service
 # Abhängigkeiten (extern): pytest
@@ -8,16 +8,18 @@ tests/test_analysis/test_engine.py
 
 Tests für analysis/engine.py — den Analyse-Orchestrator von HYPilot.
 
-Zwei Testgruppen entsprechen den zwei Betriebsmodi von engine.py:
-  1. universe_screen()   — schnelles Vorfiltern (name-basiert, kein Netzwerk)
-  2. score_instrument()  — Dividenden-Bewertung aus DB-Cache
+Fix 2026-05-11: Duplikat-Klassenname TestScoreInstrument behoben.
+  Erste Klasse (Zeile 39) hieß TestScoreInstrument — wurde von der
+  zweiten Definition (Zeile 301) still überschrieben. pytest führte
+  nur die zweite aus. Erste Klasse in TestScoreInstrumentYieldFrequency
+  umbenannt — inhaltlich korrekt, da sie Yield/Frequenz-Interaktionen
+  testet.
 
-Zusätzlich: test_filter_excludes_skip_until()
-  → prüft den Gating-Mechanismus von get_isins_due_for_update()
-  → ISINs mit skip_until in der Zukunft dürfen nicht für Update vorgesehen werden
-
-Alle Tests laufen gegen temporäre DBs aus conftest.py.
-Kein Netzwerk, kein yfinance, keine OpenFIGI-Calls.
+Drei Testgruppen:
+  1. TestScoreInstrumentYieldFrequency — Yield/Frequenz-Scoring-Interaktionen
+  2. TestFilterExcludesSkipUntil      — 18-Monats-Regel Gating
+  3. TestScoreInstrument              — Basis-Scoring-Verhalten
+  4. TestEngineRegressions            — Randfälle
 """
 
 from __future__ import annotations
@@ -32,11 +34,12 @@ from analysis.engine import UniverseEntry, score_instrument, universe_screen
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# universe_screen() — schnelles Vorfiltern
+# TestScoreInstrumentYieldFrequency — Yield/Frequenz-Interaktionen
+# (war: TestScoreInstrument — duplizierter Name, wurde nie ausgeführt)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.integration
-class TestScoreInstrument:
+class TestScoreInstrumentYieldFrequency:
 
     def test_higher_yield_gives_higher_yield_points(
         self, db_with_mixed_dividends: Path
@@ -72,7 +75,6 @@ class TestScoreInstrument:
 
         assert score_realty  is not None
         assert score_telekom is not None
-        # Frequenz-Bonus (16 Punkte) > Yield-Bonus (~10 Punkte) → Realty gewinnt
         assert score_realty.frequency_points > score_telekom.frequency_points, (
             "Monatliche Ausschüttung muss mehr frequency_points ergeben als jährliche"
         )
@@ -186,8 +188,9 @@ class TestScoreInstrument:
             f"Ungültiges Rating: '{result.rating}'"
         )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# test_filter_excludes_skip_until — 18-Monats-Regel Gating
+# TestFilterExcludesSkipUntil — 18-Monats-Regel Gating
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.integration
@@ -288,13 +291,11 @@ class TestFilterExcludesSkipUntil:
         """
         result = universe_screen(db_path=db_with_mixed_dividends)
         isins = [e.isin for e in result]
-        # Alle nicht-gefilterten Instrumente müssen erscheinen
-        # (Short Product XYZ wird durch is_investable herausgefiltert)
         assert "US7561091049" in isins or len(result) >= 1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# score_instrument() — Dividenden-Bewertung
+# TestScoreInstrument — Basis-Scoring-Verhalten
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.integration
