@@ -1,11 +1,16 @@
 # Dateiname:     gui/tabs/analyse_tab.py
+<<<<<<< HEAD
 # Version:       2026-05-11
+=======
+# Version:       2026-05-09
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 # Abhängigkeiten (intern): db.dividend_repository, analysis.scorer,
 #                          analysis.rules
 # Abhängigkeiten (extern): customtkinter
 """
 gui/tabs/analyse_tab.py
 
+<<<<<<< HEAD
 Analyse-Tab mit fünf Bereichen:
 
   1. Scoring-Verteilung    — Balkendiagramm STRONG_BUY/BUY/WATCH/REJECT
@@ -20,6 +25,15 @@ Analyse-Tab mit fünf Bereichen:
   - Sektion 5 (Datenstand & Quellen) ergänzt
   - _load_analyse_data() lädt Crossings + KPIs zusätzlich
   - AnalyseData um crossings, totals, sources erweitert
+=======
+Analyse-Tab mit drei Bereichen:
+
+  1. Scoring-Verteilung  — Balkendiagramm STRONG_BUY/BUY/WATCH/REJECT
+                           aufgeteilt nach Kategorie (ETF/STOCK/BOND/alle)
+  2. Top-20 Score        — Instrumente mit höchstem Gesamtscore
+  3. Wachstums-Highlights — stärkstes YoY-Dividendenwachstum (≥5%,
+                           keine Kürzung in der Historie)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
 Alle Daten werden einmalig im Hintergrund-Thread geladen.
 Kein Netzwerk-Call, kein yfinance — ausschließlich DB-Lesen + Scoring.
@@ -27,7 +41,11 @@ Kein Netzwerk-Call, kein yfinance — ausschließlich DB-Lesen + Scoring.
 Architektur-Entscheidungen:
   - Balkendiagramm via tkinter Canvas (kein matplotlib/plotly nötig)
   - Daten-Lade-Thread gibt AnalyseData-Dataclass via Queue zurück
+<<<<<<< HEAD
   - Fünf Sektionen in einem CTkScrollableFrame — kein Tab-in-Tab
+=======
+  - Drei Sektionen in einem CTkScrollableFrame — kein Tab-in-Tab
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 """
 
 from __future__ import annotations
@@ -37,7 +55,11 @@ import queue
 import sqlite3
 import threading
 from dataclasses import dataclass, field
+<<<<<<< HEAD
 from datetime import date, timedelta
+=======
+from datetime import date
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -84,11 +106,16 @@ class TopEntry:
     score:     int
     rating:    str
     yield_pct: str   # z.B. "12.34 %"
+<<<<<<< HEAD
     frequency: str   # z.B. "monatlich"
+=======
+    frequency: str   # z.B. "monthly"
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     yoy_pct:   str   # z.B. "+7.2 %" oder "—"
 
 
 @dataclass
+<<<<<<< HEAD
 class CrossingEntry:
     """Ein Threshold-Crossing-Ereignis."""
     direction:    str   # "up" | "down"
@@ -108,11 +135,22 @@ class AnalyseData:
     crossings:     list[CrossingEntry]
     totals:        dict[str, int]
     sources:       list[dict]
+=======
+class AnalyseData:
+    """Alle Daten für den Analyse-Tab, einmal berechnet."""
+    rating_counts: dict[str, int]             # {"STRONG_BUY": 42, ...}
+    top20:         list[TopEntry]
+    growth_top10:  list[TopEntry]
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     total_scored:  int
     load_time_ms:  int
 
 
+<<<<<<< HEAD
 # ── Datenabruf ────────────────────────────────────────────────────────────────
+=======
+# ── Datenladen ────────────────────────────────────────────────────────────────
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
 _QUERY_ALL = """
     SELECT
@@ -163,6 +201,7 @@ def _load_analyse_data() -> AnalyseData:
         with sqlite3.connect(DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(_QUERY_ALL).fetchall()
+<<<<<<< HEAD
 
             # ── Threshold-Crossings (30 Tage) ─────────────────────────────────
             cutoff = (date.today() - timedelta(days=30)).isoformat()
@@ -209,6 +248,12 @@ def _load_analyse_data() -> AnalyseData:
         return AnalyseData({}, [], [], [], {}, [], 0, 0)
 
     # ── Scoring ───────────────────────────────────────────────────────────────
+=======
+    except sqlite3.Error:
+        logger.exception("Datenbankfehler beim Laden der Analyse-Daten.")
+        return AnalyseData({}, [], [], 0, 0)
+
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     for row in rows:
         try:
             last_ex = (
@@ -230,9 +275,16 @@ def _load_analyse_data() -> AnalyseData:
 
             rating_counts[score.rating] = rating_counts.get(score.rating, 0) + 1
 
+<<<<<<< HEAD
             yoy_str = "—"
             if metrics and metrics.yoy_growth is not None:
                 pct  = float(metrics.yoy_growth) * 100
+=======
+            # YoY-Wachstum formatieren
+            yoy_str = "—"
+            if metrics and metrics.yoy_growth is not None:
+                pct = float(metrics.yoy_growth) * 100
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
                 sign = "+" if pct >= 0 else ""
                 yoy_str = f"{sign}{pct:.1f} %"
 
@@ -255,10 +307,17 @@ def _load_analyse_data() -> AnalyseData:
             logger.debug("Scoring fehlgeschlagen für %s.", row["isin"])
             continue
 
+<<<<<<< HEAD
     # ── Top-20 nach Gesamtscore ───────────────────────────────────────────────
     top20 = sorted(all_entries, key=lambda e: e.score, reverse=True)[:20]
 
     # ── Wachstums-Top-10 ─────────────────────────────────────────────────────
+=======
+    # Top-20 nach Gesamtscore
+    top20 = sorted(all_entries, key=lambda e: e.score, reverse=True)[:20]
+
+    # Wachstums-Top-10: ≥5% YoY, keine Kürzung, mind. 2 Jahre Daten
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     growth_candidates = [
         e for e in all_entries
         if (
@@ -275,6 +334,7 @@ def _load_analyse_data() -> AnalyseData:
         reverse=True,
     )[:10]
 
+<<<<<<< HEAD
     # ── Crossings aufbereiten ─────────────────────────────────────────────────
     crossings: list[CrossingEntry] = []
     for cr in crossing_rows:
@@ -289,24 +349,34 @@ def _load_analyse_data() -> AnalyseData:
             detected_at=str(cr["detected_at"])[:10],
         ))
 
+=======
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     elapsed_ms = int((_time.monotonic() - t0) * 1000)
 
     logger.info(
         "Analyse: %d Instrumente bewertet in %d ms. "
+<<<<<<< HEAD
         "Verteilung: SB=%d B=%d W=%d R=%d  |  "
         "Crossings (30d): %d",
+=======
+        "Verteilung: SB=%d B=%d W=%d R=%d",
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         len(all_entries), elapsed_ms,
         rating_counts.get("STRONG_BUY", 0),
         rating_counts.get("BUY", 0),
         rating_counts.get("WATCH", 0),
         rating_counts.get("REJECT", 0),
+<<<<<<< HEAD
         len(crossings),
+=======
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     )
 
     return AnalyseData(
         rating_counts=rating_counts,
         top20=top20,
         growth_top10=growth_top10,
+<<<<<<< HEAD
         crossings=crossings,
         totals={
             "instruments": total_instr,
@@ -315,6 +385,8 @@ def _load_analyse_data() -> AnalyseData:
             "high_yield":  high_yield,
         },
         sources=[dict(r) for r in source_rows],
+=======
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         total_scored=len(all_entries),
         load_time_ms=elapsed_ms,
     )
@@ -358,17 +430,27 @@ class _RatingChart(ctk.CTkFrame):
         bg     = "#292929" if dark else "#f0f0f0"
         self._canvas.configure(bg=bg)
 
+<<<<<<< HEAD
         max_count = max(rating_counts.values()) or 1
         canvas_w  = self._canvas.winfo_width() or 600
         bar_max_w = (
             canvas_w - self._LABEL_WIDTH - self._COUNT_WIDTH - self._PADDING * 2
         )
+=======
+        max_count  = max(rating_counts.values()) or 1
+        canvas_w   = self._canvas.winfo_width() or 600
+        bar_max_w  = canvas_w - self._LABEL_WIDTH - self._COUNT_WIDTH - self._PADDING * 2
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
         y = self._PADDING
         for rating in _RATING_ORDER:
             count = rating_counts.get(rating, 0)
             bar_w = int(bar_max_w * count / max_count) if max_count > 0 else 0
 
+<<<<<<< HEAD
+=======
+            # Label
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
             self._canvas.create_text(
                 self._PADDING,
                 y + self._BAR_HEIGHT // 2,
@@ -378,32 +460,61 @@ class _RatingChart(ctk.CTkFrame):
                 font=("", 10, "bold"),
             )
 
+<<<<<<< HEAD
+=======
+            # Balken
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
             x0 = self._PADDING + self._LABEL_WIDTH
             x1 = x0 + max(bar_w, 4)
             self._canvas.create_rectangle(
                 x0, y, x1, y + self._BAR_HEIGHT,
+<<<<<<< HEAD
                 fill=colors[rating], outline="",
             )
 
+=======
+                fill=colors[rating],
+                outline="",
+            )
+
+            # Anzahl + Prozent
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
             pct = count / total * 100 if total > 0 else 0
             self._canvas.create_text(
                 x1 + 8,
                 y + self._BAR_HEIGHT // 2,
+<<<<<<< HEAD
                 text=f"{count:,}  ({pct:.0f}%)",
+=======
+                text=f"{count} ({pct:.0f}%)",
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
                 anchor="w",
                 fill=fg,
                 font=("", 10),
             )
+<<<<<<< HEAD
             y += self._BAR_HEIGHT + self._BAR_GAP
 
         self._canvas.configure(height=y + self._PADDING)
+=======
+
+            y += self._BAR_HEIGHT + self._BAR_GAP
+
+        # Canvas-Höhe anpassen
+        needed_h = y + self._PADDING
+        self._canvas.configure(height=needed_h)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
 
 # ── Tabellen-Widget ───────────────────────────────────────────────────────────
 
 def _build_entry_table(
     master: Any,
+<<<<<<< HEAD
     columns: list[tuple[str, str, int, str]],
+=======
+    columns: list[tuple[str, str, int, str]],   # (col_id, heading, width, anchor)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 ) -> ttk.Treeview:
     """Erstellt ein einheitliches Treeview für Top-Listen."""
     dark    = ctk.get_appearance_mode() == "Dark"
@@ -411,20 +522,35 @@ def _build_entry_table(
     fg      = "#e0e0e0" if dark else "#1a1a1a"
     head_bg = "#1c1c1c" if dark else "#dcdcdc"
     head_fg = "#c8c8c8" if dark else "#333333"
+<<<<<<< HEAD
 
     col_ids = [c[0] for c in columns]
     tree    = ttk.Treeview(
+=======
+    sel_bg  = "#1f6aa5"
+
+    col_ids = [c[0] for c in columns]
+    tree = ttk.Treeview(
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         master, columns=col_ids, show="headings",
         selectmode="browse", height=10,
     )
 
+<<<<<<< HEAD
     style      = ttk.Style()
     style_name = f"Analyse{id(tree)}.Treeview"
+=======
+    style = ttk.Style()
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
 
+<<<<<<< HEAD
+=======
+    style_name = f"Analyse{id(tree)}.Treeview"
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     style.configure(
         style_name,
         background=bg, foreground=fg, fieldbackground=bg,
@@ -437,7 +563,11 @@ def _build_entry_table(
     )
     style.map(
         style_name,
+<<<<<<< HEAD
         background=[("selected", "#1f6aa5")],
+=======
+        background=[("selected", sel_bg)],
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         foreground=[("selected", "#ffffff")],
     )
     tree.configure(style=style_name)
@@ -446,6 +576,7 @@ def _build_entry_table(
         tree.column(col_id, width=width, anchor=anchor, stretch=False)
         tree.heading(col_id, text=heading)
 
+<<<<<<< HEAD
     dark = ctk.get_appearance_mode() == "Dark"
     tree.tag_configure("STRONG_BUY", foreground="#66bb6a" if dark else "#1b5e20")
     tree.tag_configure("BUY",        foreground="#aed581" if dark else "#558b2f")
@@ -453,6 +584,17 @@ def _build_entry_table(
     tree.tag_configure("REJECT",     foreground="#ef5350" if dark else "#b71c1c")
     tree.tag_configure("up",         foreground="#66bb6a" if dark else "#1b5e20")
     tree.tag_configure("down",       foreground="#ef5350" if dark else "#b71c1c")
+=======
+    # Rating-Farben
+    sb_fg  = "#66bb6a" if dark else "#1b5e20"
+    buy_fg = "#aed581" if dark else "#558b2f"
+    w_fg   = "#ffb74d" if dark else "#e65100"
+    r_fg   = "#ef5350" if dark else "#b71c1c"
+    tree.tag_configure("STRONG_BUY", foreground=sb_fg)
+    tree.tag_configure("BUY",        foreground=buy_fg)
+    tree.tag_configure("WATCH",      foreground=w_fg)
+    tree.tag_configure("REJECT",     foreground=r_fg)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
     return tree
 
@@ -460,13 +602,21 @@ def _build_entry_table(
 # ── Hauptklasse ───────────────────────────────────────────────────────────────
 
 class AnalyseTab(ctk.CTkFrame):
+<<<<<<< HEAD
     """Analyse-Tab mit Scoring-Verteilung, Top-20, Wachstum, Crossings, KPIs."""
+=======
+    """Analyse-Tab mit Scoring-Verteilung, Top-20 und Wachstums-Highlights."""
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
 
         self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+<<<<<<< HEAD
         self._data:  AnalyseData | None = None
+=======
+        self._data: AnalyseData | None = None
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -477,7 +627,11 @@ class AnalyseTab(ctk.CTkFrame):
         self.after(100, self._process_queue)
         self._start_load()
 
+<<<<<<< HEAD
     # ── Toolbar ───────────────────────────────────────────────────────────────
+=======
+    # ── Layout ────────────────────────────────────────────────────────────────
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -496,21 +650,34 @@ class AnalyseTab(ctk.CTkFrame):
         )
         self._status_label.pack(side="left", padx=(8, 0))
 
+<<<<<<< HEAD
     # ── Inhalt ────────────────────────────────────────────────────────────────
 
+=======
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     def _build_content(self) -> None:
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=(8, 0))
         scroll.grid_columnconfigure(0, weight=1)
         self._scroll = scroll
 
+<<<<<<< HEAD
         # ── 1. Scoring-Verteilung ─────────────────────────────────────────────
+=======
+        # ── Sektion 1: Scoring-Verteilung ─────────────────────────────────────
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         self._build_section_header(scroll, 0, "📊  Scoring-Verteilung")
         self._chart = _RatingChart(scroll, height=200)
         self._chart.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 16))
 
+<<<<<<< HEAD
         # ── 2. Top-20 Score ───────────────────────────────────────────────────
         self._build_section_header(scroll, 2, "🏆  Top-20 nach Gesamtscore")
+=======
+        # ── Sektion 2: Top-20 Score ────────────────────────────────────────────
+        self._build_section_header(scroll, 2, "🏆  Top-20 nach Gesamtscore")
+
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         top20_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         top20_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 16))
         top20_frame.grid_columnconfigure(0, weight=1)
@@ -526,6 +693,7 @@ class AnalyseTab(ctk.CTkFrame):
                 ("freq",   "Frequenz",    90, "center"),
             ],
         )
+<<<<<<< HEAD
         vsb1 = ttk.Scrollbar(top20_frame, orient="vertical",
                               command=self._top20_tree.yview)
         self._top20_tree.configure(yscrollcommand=vsb1.set)
@@ -533,17 +701,34 @@ class AnalyseTab(ctk.CTkFrame):
         vsb1.grid(row=0, column=1, sticky="ns")
 
         # ── 3. Wachstums-Highlights ───────────────────────────────────────────
+=======
+        vsb = ttk.Scrollbar(
+            top20_frame, orient="vertical", command=self._top20_tree.yview
+        )
+        self._top20_tree.configure(yscrollcommand=vsb.set)
+        self._top20_tree.grid(row=0, column=0, sticky="ew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        # ── Sektion 3: Wachstums-Highlights ───────────────────────────────────
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         self._build_section_header(
             scroll, 4,
             "🌱  Wachstums-Highlights  (≥5% YoY, keine Kürzung, ≥2 Jahre)",
         )
+<<<<<<< HEAD
         growth_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         growth_frame.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 16))
+=======
+
+        growth_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        growth_frame.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 24))
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         growth_frame.grid_columnconfigure(0, weight=1)
 
         self._growth_tree = _build_entry_table(
             growth_frame,
             [
+<<<<<<< HEAD
                 ("rank",  "#",          36,  "center"),
                 ("name",  "Wertpapier", 300, "w"),
                 ("yoy",   "YoY",         80, "e"),
@@ -554,10 +739,24 @@ class AnalyseTab(ctk.CTkFrame):
         )
         vsb2 = ttk.Scrollbar(growth_frame, orient="vertical",
                               command=self._growth_tree.yview)
+=======
+                ("rank",   "#",          36,  "center"),
+                ("name",   "Wertpapier", 300, "w"),
+                ("yoy",    "YoY",         80, "e"),
+                ("score",  "Score",        70, "center"),
+                ("yield",  "Rendite",      80, "e"),
+                ("freq",   "Frequenz",     90, "center"),
+            ],
+        )
+        vsb2 = ttk.Scrollbar(
+            growth_frame, orient="vertical", command=self._growth_tree.yview
+        )
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         self._growth_tree.configure(yscrollcommand=vsb2.set)
         self._growth_tree.grid(row=0, column=0, sticky="ew")
         vsb2.grid(row=0, column=1, sticky="ns")
 
+<<<<<<< HEAD
         # ── 4. Threshold-Crossings ────────────────────────────────────────────
         self._build_section_header(
             scroll, 6, "⚡  Threshold-Crossings  (letzte 30 Tage)"
@@ -635,6 +834,8 @@ class AnalyseTab(ctk.CTkFrame):
             lbl.grid(row=i, column=0, sticky="w", pady=1)
             self._source_labels.append(lbl)
 
+=======
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
     def _build_section_header(
         self, parent: Any, row: int, text: str
     ) -> None:
@@ -673,9 +874,13 @@ class AnalyseTab(ctk.CTkFrame):
                 if kind == "data":
                     self._render(payload)
                 elif kind == "error":
+<<<<<<< HEAD
                     self._status_label.configure(
                         text=f"⚠ Fehler: {payload[:80]}"
                     )
+=======
+                    self._status_label.configure(text=f"⚠ Fehler: {payload}")
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         except queue.Empty:
             pass
         self.after(100, self._process_queue)
@@ -685,6 +890,10 @@ class AnalyseTab(ctk.CTkFrame):
     def _render(self, data: AnalyseData) -> None:
         self._data = data
 
+<<<<<<< HEAD
+=======
+        # Status
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         self._status_label.configure(
             text=(
                 f"{data.total_scored:,} Instrumente bewertet  |  "
@@ -692,7 +901,11 @@ class AnalyseTab(ctk.CTkFrame):
             )
         )
 
+<<<<<<< HEAD
         # Chart (nach kurzem Delay damit Canvas-Breite bekannt ist)
+=======
+        # Chart rendern (nach kurzem Delay damit Canvas-Breite bekannt ist)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
         self.after(50, lambda: self._chart.render(
             data.rating_counts, data.total_scored
         ))
@@ -700,6 +913,7 @@ class AnalyseTab(ctk.CTkFrame):
         # Top-20
         self._top20_tree.delete(*self._top20_tree.get_children())
         for rank, entry in enumerate(data.top20, 1):
+<<<<<<< HEAD
             name = entry.name[:45] + "…" if len(entry.name) > 45 else entry.name
             self._top20_tree.insert(
                 "", "end",
@@ -707,6 +921,17 @@ class AnalyseTab(ctk.CTkFrame):
                     rank, name, entry.score,
                     _RATING_LABEL[entry.rating],
                     entry.yield_pct, entry.frequency,
+=======
+            self._top20_tree.insert(
+                "", "end",
+                values=(
+                    rank,
+                    entry.name[:45] + "…" if len(entry.name) > 45 else entry.name,
+                    entry.score,
+                    _RATING_LABEL[entry.rating],
+                    entry.yield_pct,
+                    entry.frequency,
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
                 ),
                 tags=(entry.rating,),
             )
@@ -717,6 +942,7 @@ class AnalyseTab(ctk.CTkFrame):
             self._growth_tree.insert(
                 "", "end",
                 values=("—", "Keine Instrumente erfüllen die Kriterien",
+<<<<<<< HEAD
                         "—", "—", "—", "—"),
             )
         else:
@@ -773,3 +999,21 @@ class AnalyseTab(ctk.CTkFrame):
                 )
             else:
                 lbl.configure(text="")
+=======
+                         "—", "—", "—", "—"),
+            )
+        else:
+            for rank, entry in enumerate(data.growth_top10, 1):
+                self._growth_tree.insert(
+                    "", "end",
+                    values=(
+                        rank,
+                        entry.name[:40] + "…" if len(entry.name) > 40 else entry.name,
+                        entry.yoy_pct,
+                        entry.score,
+                        entry.yield_pct,
+                        entry.frequency,
+                    ),
+                    tags=(entry.rating,),
+                )
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a

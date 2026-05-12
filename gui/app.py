@@ -1,25 +1,11 @@
 # Dateiname:     gui/app.py
-# Version:       2026-05-08-A
-# Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab
+# Version:       2026-05-09-watchlist
+# Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab,
+#                          gui.tabs.analyse_tab, gui.tabs.watchlist_tab
 # Abhängigkeiten (extern): customtkinter
 """
-gui/app.py
-
-HYPilot Hauptfenster.
-
-Startup-Sequenz (800 ms nach erstem Rendern):
-  1. Statusleiste mit Zusammenfassung des letzten Auto-Laufs befüllen
-  2. ThresholdCrossingPopup öffnen wenn ungesehene Crossings vorhanden
-
-Tabs:
-  - TR-Universum   : vollständiges Instrument-Universum
-  - High-Yield ≥10%: vorgefilterter Datensatz + CSV-Export
-  - Analyse        : Platzhalter
-  - Watchlist      : Platzhalter
-  - Portfolio      : Platzhalter
-
-Fenstergröße wird in der SQLite-Tabelle metadata gespeichert
-und beim nächsten Start wiederhergestellt.
+gui/app.py — Neu: WatchlistTab eingebunden,
+set_watchlist_tab() auf Universe- und HighYieldTab aufgerufen.
 """
 
 from __future__ import annotations
@@ -31,9 +17,14 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from gui.tabs.universe_tab import UniverseTab
+from gui.tabs.universe_tab   import UniverseTab
 from gui.tabs.high_yield_tab import HighYieldTab
+<<<<<<< HEAD
 from gui.tabs.analyse_tab import AnalyseTab
+=======
+from gui.tabs.analyse_tab    import AnalyseTab
+from gui.tabs.watchlist_tab  import WatchlistTab
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
 logger = logging.getLogger(__name__)
 
@@ -48,19 +39,14 @@ class HYPilotApp(ctk.CTk):
 
     def __init__(self) -> None:
         super().__init__()
-
         self.title("HYPilot")
         self.minsize(900, 600)
         self._restore_geometry()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
         self._build_menu_bar()
         self._build_tab_view()
         self._build_status_bar()
-
         self.after(800, self._startup_checks)
-
-    # ── Geometrie ─────────────────────────────────────────────────────────────
 
     def _restore_geometry(self) -> None:
         try:
@@ -85,24 +71,18 @@ class HYPilotApp(ctk.CTk):
         except sqlite3.Error:
             logger.warning("Fenstergeometrie konnte nicht gespeichert werden.")
 
-    # ── Menüleiste ────────────────────────────────────────────────────────────
-
     def _build_menu_bar(self) -> None:
         bar = ctk.CTkFrame(self, height=36, corner_radius=0)
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
-
-        menus = {
+        for label, command in {
             "Datei":   self._menu_datei,
             "Ansicht": None,
             "Extras":  None,
             "Hilfe":   None,
-        }
-        for label, command in menus.items():
+        }.items():
             ctk.CTkButton(
-                bar,
-                text=label,
-                width=72, height=30,
+                bar, text=label, width=72, height=30,
                 fg_color="transparent",
                 hover_color=("gray80", "gray30"),
                 corner_radius=4,
@@ -110,26 +90,33 @@ class HYPilotApp(ctk.CTk):
             ).pack(side="left", padx=2, pady=3)
 
     def _menu_datei(self) -> None:
-        pass  # Platzhalter
-
-    # ── Tabs ──────────────────────────────────────────────────────────────────
+        pass
 
     def _build_tab_view(self) -> None:
         self._tab_view = ctk.CTkTabview(self, corner_radius=4)
-        self._tab_view.pack(fill="both", expand=True, padx=6, pady=(0, 0))
+        self._tab_view.pack(fill="both", expand=True, padx=6)
 
-        # Tab: TR-Universum
+        # TR-Universum
         self._tab_view.add("TR-Universum")
-        UniverseTab(
+        self._universe_tab = UniverseTab(
             self._tab_view.tab("TR-Universum")
-        ).pack(fill="both", expand=True)
+        )
+        self._universe_tab.pack(fill="both", expand=True)
 
-        # Tab: High-Yield
+        # High-Yield
         self._tab_view.add("High-Yield ≥10 %")
-        HighYieldTab(
+        self._high_yield_tab = HighYieldTab(
             self._tab_view.tab("High-Yield ≥10 %")
+        )
+        self._high_yield_tab.pack(fill="both", expand=True)
+
+        # Analyse
+        self._tab_view.add("Analyse")
+        AnalyseTab(
+            self._tab_view.tab("Analyse")
         ).pack(fill="both", expand=True)
 
+<<<<<<< HEAD
         # Tab: Analyse
         self._tab_view.add("Analyse")
         AnalyseTab(
@@ -144,20 +131,35 @@ for name in ("Watchlist", "Portfolio"):
         text=f"{name} — in Entwicklung",
         text_color=("gray50", "gray60"),
     ).pack(expand=True)
+=======
+        # Watchlist
+        self._tab_view.add("Watchlist")
+        self._watchlist_tab = WatchlistTab(
+            self._tab_view.tab("Watchlist")
+        )
+        self._watchlist_tab.pack(fill="both", expand=True)
+>>>>>>> 05dbe87976d2427e8570c4bd371874b0ee11d85a
 
-    # ── Statusleiste ──────────────────────────────────────────────────────────
+        # Watchlist-Referenz an andere Tabs weitergeben
+        self._universe_tab.set_watchlist_tab(self._watchlist_tab)
+        self._high_yield_tab.set_watchlist_tab(self._watchlist_tab)
+
+        # Portfolio
+        self._tab_view.add("Portfolio")
+        ctk.CTkLabel(
+            self._tab_view.tab("Portfolio"),
+            text="Portfolio — in Entwicklung",
+            text_color=("gray50", "gray60"),
+        ).pack(expand=True)
 
     def _build_status_bar(self) -> None:
         bar = ctk.CTkFrame(self, height=26, corner_radius=0)
         bar.pack(fill="x", side="bottom")
         bar.pack_propagate(False)
-
         self._status_label = ctk.CTkLabel(
-            bar,
-            text="",
+            bar, text="",
             text_color=("gray45", "gray65"),
-            font=ctk.CTkFont(size=11),
-            anchor="w",
+            font=ctk.CTkFont(size=11), anchor="w",
         )
         self._status_label.pack(side="left", padx=10)
 
@@ -184,40 +186,27 @@ for name in ("Watchlist", "Portfolio"):
         except Exception:
             return ""
 
-    # ── Startup-Checks ────────────────────────────────────────────────────────
-
     def _startup_checks(self) -> None:
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
-
         try:
             from db.dividend_repository import get_unshown_threshold_crossings
             crossings = get_unshown_threshold_crossings()
         except Exception:
             logger.exception("Fehler beim Laden der Threshold-Crossings.")
             return
-
         if crossings:
-            logger.info(
-                "%d ungesehene Schwellwert-Überschreitungen — öffne Popup.",
-                len(crossings),
-            )
             self._open_threshold_popup()
 
     def _open_threshold_popup(self) -> None:
         from gui.widgets.threshold_crossing_popup import ThresholdCrossingPopup
-        ThresholdCrossingPopup(
-            self,
-            on_closed=self._on_threshold_popup_closed,
-        )
+        ThresholdCrossingPopup(self, on_closed=self._on_threshold_popup_closed)
 
     def _on_threshold_popup_closed(self) -> None:
         summary = self._load_last_run_summary()
         if summary:
             self._set_status(summary)
-
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def _on_close(self) -> None:
         self._save_geometry()

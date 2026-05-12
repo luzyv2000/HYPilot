@@ -1,5 +1,5 @@
 # Dateiname:     core/dividend_service.py
-# Version:       2026-05-09
+# Version:       2026-05-10
 # Abhängigkeiten (intern): core.dividend_source, core.ticker_resolver,
 #                          core.sources.divvydiary_source,
 #                          core.sources.yfinance_source,
@@ -16,6 +16,14 @@ Kaskaden-Reihenfolge (sequenziell, erste Non-None-Antwort gewinnt):
                             Quelle still übersprungen.
   2. yfinance             — breite Abdeckung, bewährter Fallback.
                             Erfordert aufgelösten Ticker aus ticker_resolver.
+
+Plausibilitäts-Cap:
+  yield_bps > _MAX_PLAUSIBLE_YIELD_BPS (5000 = 50%) wird verworfen.
+  Betrifft hauptsächlich DivvyDiary-Sonderausschüttungen und
+  Kapitalrückzahlungen die fälschlicherweise als Dividendenrendite
+  gemeldet werden (z.B. Leo Lithium 681%, East West Minerals 368%).
+  50% ist großzügig genug für echte Hochdividendenwerte
+  (BDCs, REITs, CEFs können 20–30% erreichen).
 
 Bewusst NICHT in der Kaskade:
   boerse_frankfurt — API erfordert interne IDs, kein öffentlicher Zugang.
@@ -58,11 +66,45 @@ _CASCADE_SOURCES = [
     (_YFINANCE,   False),
 ]
 
-HIGH_YIELD_THRESHOLD = Decimal("0.10")
-_HIGH_YIELD_BPS      = 1000
-_BATCH_PAUSE_SECONDS = 2.0
+HIGH_YIELD_THRESHOLD   = Decimal("0.10")
+_HIGH_YIELD_BPS        = 1000
+_BATCH_PAUSE_SECONDS   = 2.0
+
+# Plausibilitäts-Cap: Renditen über 50% sind mit hoher Wahrscheinlichkeit
+# Datenfehler (Sonderausschüttungen, Kapitalrückzahlungen, API-Artefakte).
+# Echte Hochdividendenwerte (BDCs, CEFs, REITs) erreichen selten > 30%.
+_MAX_PLAUSIBLE_YIELD_BPS: int = 5_000  # 50 %
 
 ProgressCallback = Callable[[int, int, str, str], None]
+
+
+# ── Plausibilitätsprüfung ─────────────────────────────────────────────────────
+
+def _is_plausible(snapshot: DividendSnapshot, isin: str) -> bool:
+    """
+    Prüft ob ein Snapshot plausible Rendite-Daten enthält.
+
+    Returns:
+        False wenn yield_bps den Cap überschreitet — Snapshot wird verworfen.
+        True wenn yield_bps None oder im plausiblen Bereich.
+    """
+    if snapshot.yield_bps is None:
+        return True
+
+    if snapshot.yield_bps > _MAX_PLAUSIBLE_YIELD_BPS:
+        logger.warning(
+            "Plausibilitäts-Cap: %s → yield_bps=%d (%.1f %%) aus '%s' "
+            "überschreitet Cap von %d bps (%.0f %%) — verworfen.",
+            isin,
+            snapshot.yield_bps,
+            snapshot.yield_bps / 100,
+            snapshot.data_source,
+            _MAX_PLAUSIBLE_YIELD_BPS,
+            _MAX_PLAUSIBLE_YIELD_BPS / 100,
+        )
+        return False
+
+    return True
 
 
 # ── Kaskaden-Orchestrator ─────────────────────────────────────────────────────
@@ -74,12 +116,12 @@ def _cascade_fetch_snapshot(
 ) -> DividendSnapshot | None:
     """
     Versucht Dividenden-Snapshot sequenziell über alle konfigurierten Quellen.
-    Erste Non-None-Antwort gewinnt.
+    Erste Non-None-Antwort die den Plausibilitäts-Cap besteht gewinnt.
 
     Args:
         isin:    ISIN des Instruments
         ticker:  Aufgelöster Ticker (wird nur von yfinance benötigt)
-        db_path: Pfad zur SQLite-DB (für zukünftige Source-Caching-Logik)
+        db_path: Pfad zur SQLite-DB
 
     Returns:
         DividendSnapshot der ersten erfolgreichen Quelle, oder None.
@@ -96,16 +138,23 @@ def _cascade_fetch_snapshot(
 
         try:
             snapshot = source.fetch_snapshot(isin, src_ticker)
-            if snapshot is not None:
-                logger.info(
-                    "Kaskade: %s → Quelle '%s' erfolgreich.",
+            if snapshot is None:
+                logger.debug(
+                    "Kaskade: %s → '%s' kein Ergebnis.",
                     isin, source.source_name,
                 )
-                return snapshot
-            logger.debug(
-                "Kaskade: %s → '%s' kein Ergebnis.",
+                continue
+
+            if not _is_plausible(snapshot, isin):
+                # Unplausibler Wert → nächste Quelle versuchen
+                continue
+
+            logger.info(
+                "Kaskade: %s → Quelle '%s' erfolgreich.",
                 isin, source.source_name,
             )
+            return snapshot
+
         except Exception:
             logger.debug(
                 "Kaskade: %s → '%s' fehlgeschlagen (Exception).",
@@ -180,25 +229,20 @@ def update_dividend_data(
 ) -> DividendSnapshot | None:
     """
     Aktualisiert Dividendendaten für eine ISIN via Multi-Source-Kaskade.
-    Wendet 18-Monats-Regel und Schwellwert-Tracking an.
+    Wendet Plausibilitäts-Cap, 18-Monats-Regel und Schwellwert-Tracking an.
     """
     logger.info("Dividenden-Update: %s", isin)
 
-    # Ticker für yfinance auflösen (von ISIN-nativen Quellen ignoriert)
     ticker = ticker_resolver.resolve(isin, db_path=db_path)
 
-    # Vorherigen Wert für Schwellwert-Vergleich merken
     old_snapshot = dividend_repository.get_snapshot(isin, db_path=db_path)
     old_bps      = old_snapshot.yield_bps if old_snapshot else None
 
-    # Kaskade: Snapshot
     snapshot = _cascade_fetch_snapshot(isin, ticker, db_path)
-
-    # Kaskade: Historie (für 18-Monats-Regel)
-    history = _cascade_fetch_history(isin, ticker)
+    history  = _cascade_fetch_history(isin, ticker)
 
     if snapshot is None:
-        logger.warning("Kein Snapshot für %s aus keiner Quelle.", isin)
+        logger.warning("Kein plausibler Snapshot für %s aus keiner Quelle.", isin)
         return None
 
     # ── 18-Monats-Regel ───────────────────────────────────────────────────────
