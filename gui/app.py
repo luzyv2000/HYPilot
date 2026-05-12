@@ -33,6 +33,7 @@ import customtkinter as ctk
 
 from gui.tabs.universe_tab import UniverseTab
 from gui.tabs.high_yield_tab import HighYieldTab
+from gui.tabs.analyse_tab import AnalyseTab
 
 logger = logging.getLogger(__name__)
 
@@ -129,14 +130,20 @@ class HYPilotApp(ctk.CTk):
             self._tab_view.tab("High-Yield ≥10 %")
         ).pack(fill="both", expand=True)
 
-        # Platzhalter-Tabs
-        for name in ("Analyse", "Watchlist", "Portfolio"):
-            self._tab_view.add(name)
-            ctk.CTkLabel(
-                self._tab_view.tab(name),
-                text=f"{name} — in Entwicklung",
-                text_color=("gray50", "gray60"),
-            ).pack(expand=True)
+        # Tab: Analyse
+        self._tab_view.add("Analyse")
+        AnalyseTab(
+            self._tab_view.tab("Analyse")
+        ).pack(fill="both", expand=True)
+
+# Platzhalter-Tabs (Watchlist + Portfolio bleiben)
+for name in ("Watchlist", "Portfolio"):
+    self._tab_view.add(name)
+    ctk.CTkLabel(
+        self._tab_view.tab(name),
+        text=f"{name} — in Entwicklung",
+        text_color=("gray50", "gray60"),
+    ).pack(expand=True)
 
     # ── Statusleiste ──────────────────────────────────────────────────────────
 
