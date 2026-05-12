@@ -1,5 +1,5 @@
 # Dateiname:     gui/tabs/watchlist_tab.py
-# Version:       2026-05-10 
+# Version:       2026-05-12
 # Abhängigkeiten (intern): db.watchlist_repository,
 #                          gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
@@ -16,6 +16,10 @@ Funktionen:
   - Notizfeld: Freitext pro ISIN (Inline-Bearbeitung)
   - Score-Detail-Panel bei Selektion
   - Instrument-Anzahl in der Toolbar
+
+Fix 2026-05-12:
+  - notes or "" in _populate — verhindert TypeError wenn notes NULL
+  - Watchlist-Button-Text vereinheitlicht (⭐ konsistent mit HighYieldTab)
 """
 
 from __future__ import annotations
@@ -54,36 +58,36 @@ def _format_div(yield_bps: int | None) -> str:
 def _load_watchlist_rows() -> list[tuple]:
     """
     Lädt Watchlist-Einträge mit Scoring.
-    Gibt Liste von (isin, name, wkn, yield, score, notes, added_at) zurück.
-    Läuft im Hintergrund-Thread.
+    Gibt Liste von (isin, name, wkn, yield, score, rating, notes, added_at)
+    zurück. Läuft im Hintergrund-Thread.
     """
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
     from db.dividend_repository import get_growth_metrics_bulk, get_snapshot
 
     entries    = get_watchlist()
-    isins      = [e.isin for e in entries]
-    growth_map = get_growth_metrics_bulk(db_path=DB_PATH) if isins else {}
+    growth_map = get_growth_metrics_bulk(db_path=DB_PATH) if entries else {}
 
     rows = []
     for entry in entries:
         yield_str    = "—"
         score_str    = "—"
-        score_rating = None
+        score_rating = ""
 
         try:
             snapshot = get_snapshot(entry.isin, db_path=DB_PATH)
             if snapshot is not None:
                 metrics   = growth_map.get(entry.isin)
-                score     = score_dividend_snapshot(snapshot, growth_metrics=metrics)
-                yield_str = _format_div(snapshot.yield_bps)
-                short     = _RATING_SHORT.get(score.rating, "?")
-                score_str = f"{score.total} {short}"
+                score     = score_dividend_snapshot(
+                    snapshot, growth_metrics=metrics
+                )
+                yield_str    = _format_div(snapshot.yield_bps)
+                short        = _RATING_SHORT.get(score.rating, "?")
+                score_str    = f"{score.total} {short}"
                 score_rating = score.rating
         except Exception:
             logger.debug("Scoring fehlgeschlagen für %s.", entry.isin)
 
-        # added_at: nur Datum anzeigen
         added_display = entry.added_at[:10] if entry.added_at else "—"
 
         rows.append((
@@ -92,8 +96,8 @@ def _load_watchlist_rows() -> list[tuple]:
             entry.wkn or "",
             yield_str,
             score_str,
-            score_rating or "",
-            entry.notes,
+            score_rating,
+            entry.notes,     # kann None sein → in _populate abgesichert
             added_display,
         ))
 
@@ -110,7 +114,7 @@ class WatchlistTab(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
 
         self._queue: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self._rows: list[tuple] = []
+        self._rows:  list[tuple] = []
 
         self._build_toolbar()
         self._build_table()
@@ -161,7 +165,6 @@ class WatchlistTab(ctk.CTkFrame):
         fg      = "#e0e0e0" if dark else "#1a1a1a"
         head_bg = "#1c1c1c" if dark else "#dcdcdc"
         head_fg = "#c8c8c8" if dark else "#333333"
-        sel_bg  = "#1f6aa5"
 
         cols = ("name", "isin_wkn", "yield", "score", "notes", "added")
         self._tree = ttk.Treeview(
@@ -169,19 +172,19 @@ class WatchlistTab(ctk.CTkFrame):
             selectmode="browse",
         )
 
-        self._tree.column("name",    width=320, anchor="w",      stretch=True)
-        self._tree.column("isin_wkn",width=160, anchor="w",      stretch=False)
-        self._tree.column("yield",   width=80,  anchor="e",      stretch=False)
-        self._tree.column("score",   width=80,  anchor="center", stretch=False)
-        self._tree.column("notes",   width=200, anchor="w",      stretch=True)
-        self._tree.column("added",   width=100, anchor="center", stretch=False)
+        self._tree.column("name",     width=320, anchor="w",      stretch=True)
+        self._tree.column("isin_wkn", width=160, anchor="w",      stretch=False)
+        self._tree.column("yield",    width=80,  anchor="e",      stretch=False)
+        self._tree.column("score",    width=80,  anchor="center", stretch=False)
+        self._tree.column("notes",    width=200, anchor="w",      stretch=True)
+        self._tree.column("added",    width=100, anchor="center", stretch=False)
 
-        self._tree.heading("name",    text="Wertpapier")
-        self._tree.heading("isin_wkn",text="ISIN / WKN")
-        self._tree.heading("yield",   text="Rendite")
-        self._tree.heading("score",   text="Score")
-        self._tree.heading("notes",   text="Notiz")
-        self._tree.heading("added",   text="Hinzugefügt")
+        self._tree.heading("name",     text="Wertpapier")
+        self._tree.heading("isin_wkn", text="ISIN / WKN")
+        self._tree.heading("yield",    text="Rendite")
+        self._tree.heading("score",    text="Score")
+        self._tree.heading("notes",    text="Notiz")
+        self._tree.heading("added",    text="Hinzugefügt")
 
         style = ttk.Style()
         try:
@@ -201,7 +204,7 @@ class WatchlistTab(ctk.CTkFrame):
         )
         style.map(
             "Watchlist.Treeview",
-            background=[("selected", sel_bg)],
+            background=[("selected", "#1f6aa5")],
             foreground=[("selected", "#ffffff")],
         )
         self._tree.configure(style="Watchlist.Treeview")
@@ -221,7 +224,7 @@ class WatchlistTab(ctk.CTkFrame):
         vsb.grid(row=0, column=1, sticky="ns")
 
         self._tree.bind("<<TreeviewSelect>>", self._on_select)
-        self._tree.bind("<Double-1>",         self._on_double_click)
+        self._tree.bind("<Double-1>",          self._on_double_click)
 
     def _build_notes_bar(self) -> None:
         """Inline-Notizbearbeitung unterhalb der Tabelle."""
@@ -277,7 +280,7 @@ class WatchlistTab(ctk.CTkFrame):
                 if kind == "data":
                     self._populate(payload)
                 elif kind == "error":
-                    self._count_label.configure(text=f"⚠ {payload}")
+                    self._count_label.configure(text=f"⚠ {payload[:60]}")
         except queue.Empty:
             pass
         self.after(100, self._process_queue)
@@ -290,8 +293,13 @@ class WatchlistTab(ctk.CTkFrame):
 
         for row in rows:
             isin, name, wkn, yield_str, score_str, rating, notes, added = row
+
+            # Fix: notes kann NULL aus DB sein
+            notes    = notes or ""
+
             isin_wkn = f"{isin}\n{wkn}" if wkn else isin
-            tags = (rating,) if rating else ()
+            tags     = (rating,) if rating else ()
+
             self._tree.insert(
                 "", "end",
                 iid=isin,
@@ -331,9 +339,10 @@ class WatchlistTab(ctk.CTkFrame):
         # Notizfeld befüllen
         row = next((r for r in self._rows if r[0] == isin), None)
         if row:
+            notes = row[6] or ""
             self._notes_entry.configure(state="normal")
             self._notes_entry.delete(0, "end")
-            self._notes_entry.insert(0, row[6])  # notes
+            self._notes_entry.insert(0, notes)
             self._notes_save_btn.configure(state="normal")
 
     def _on_double_click(self, event: tk.Event) -> None:
@@ -364,7 +373,7 @@ class WatchlistTab(ctk.CTkFrame):
         self._detail_panel.clear()
         self._start_load()
 
-    # ── Öffentliche API (für andere Tabs) ────────────────────────────────────
+    # ── Öffentliche API ───────────────────────────────────────────────────────
 
     def reload(self) -> None:
         """Wird von UniverseTab/HighYieldTab nach Watchlist-Änderung aufgerufen."""
