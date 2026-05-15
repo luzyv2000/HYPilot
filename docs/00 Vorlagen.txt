@@ -35,5 +35,9 @@ sudo apt install tree
 
 tree -L 5 ~/workspace/openclaw-min > 2026-05-15_ordnerstruktur.txt
 
-=======   ======= 
+======= Ordnerstruktur deLuxe =======
 
+tree -a -I 'node_modules|.git|dist|build|coverage|__pycache__' \
+-L 4 ~/workspace/openclaw-min > projektstruktur.txt
+
+=======   ======= 
