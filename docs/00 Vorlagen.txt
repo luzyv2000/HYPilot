@@ -29,5 +29,11 @@ git add -A
 git commit -m "fix: KOMMENTAR"
 git push
 
+======= Ordnerstruktur ===============================
+
+sudo apt install tree
+
+tree ~/workspace/openclaw-min > 2026-05-15_ordnerstruktur.txt
+
 ==============================================
 
