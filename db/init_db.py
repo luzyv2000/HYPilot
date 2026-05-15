@@ -1,11 +1,12 @@
 # Dateiname:     db/init_db.py
-# Version:       2026-05-09-watchlist
+# Version:       2026-05-15-portfolio
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
 db/init_db.py
 
-Neu 2026-05-09: watchlist-Tabelle (isin, notes, added_at).
+Neu 2026-05-15: portfolio-Tabelle
+  (isin, shares_micro, buy_price_micro, currency, notes, added_at).
 """
 
 from __future__ import annotations
@@ -124,14 +125,29 @@ _TABLE_DDL: list[str] = [
     """,
 
     # ── Watchlist ──────────────────────────────────────────────────────────────
-    # notes: optionaler Freitext pro ISIN (max 500 Zeichen, Anwendungsebene)
-    # added_at: Zeitstempel des Hinzufügens
     """
     CREATE TABLE IF NOT EXISTS watchlist (
         isin       TEXT PRIMARY KEY
                    REFERENCES instruments(isin) ON DELETE CASCADE,
         notes      TEXT NOT NULL DEFAULT '',
         added_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+
+    # ── Portfolio ──────────────────────────────────────────────────────────────
+    # shares_micro    : 1_000_000 = 1 Anteil (unterstützt Bruchteile)
+    # buy_price_micro : Kaufkurs pro Anteil in Micro-Units (optional)
+    # currency        : Kaufwährung (ISO 4217)
+    # notes           : Freitext (optional)
+    """
+    CREATE TABLE IF NOT EXISTS portfolio (
+        isin             TEXT PRIMARY KEY
+                         REFERENCES instruments(isin) ON DELETE CASCADE,
+        shares_micro     INTEGER NOT NULL,
+        buy_price_micro  INTEGER,
+        currency         TEXT NOT NULL DEFAULT 'EUR',
+        notes            TEXT NOT NULL DEFAULT '',
+        added_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
 ]
@@ -181,6 +197,7 @@ _INDEX_DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_crossings_shown     ON threshold_crossings(shown_at)",
     "CREATE INDEX IF NOT EXISTS idx_div_skip_until      ON dividend_data(skip_until)",
     "CREATE INDEX IF NOT EXISTS idx_watchlist_added     ON watchlist(added_at)",
+    "CREATE INDEX IF NOT EXISTS idx_portfolio_added     ON portfolio(added_at)",
 ]
 
 
