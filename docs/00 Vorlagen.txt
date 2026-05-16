@@ -46,4 +46,58 @@ echo '```text' > 2026-05-15_ordnerstruktur.md
 tree -a >> 2026-05-15_ordnerstruktur.md
 echo '```' >> 2026-05-15_ordnerstruktur.md
 
-=======   ======= 
+======= Review ======= 
+
+Prompt 1 – Vollständiger Architektur‑Review (Phase 1)
+„Analysiere die Architektur des gesamten Repositories HYPilot.  
+Nutze folgende Kriterien:  
+– Modulstruktur  
+– Abhängigkeiten  
+– Core vs. GUI vs. Utils  
+– Circular Dependencies  
+– Entry‑Point‑Design  
+– Service‑Layer‑Qualität  
+– Datenfluss  
+Erstelle anschließend eine priorisierte Liste der größten Architekturprobleme.“
+
+---
+
+Prompt 2 – Fehlerbehandlung & Robustheit (Phase 2)
+„Führe eine vollständige Analyse der Fehlerbehandlung im gesamten Projekt durch.  
+Identifiziere:  
+– fehlende Try/Except‑Blöcke  
+– unklare Exception‑Typen  
+– fehlende Recovery‑Mechanismen  
+– GUI‑Thread‑Safety  
+– API‑Timeouts & Retry‑Strategien.“
+
+---
+
+Prompt 3 – Code‑Qualität & Best Practices (Phase 3)
+„Analysiere alle Module auf PEP‑8‑Konformität, Type Hints, Docstrings, Magic Numbers und zyklomatische Komplexität.  
+Erstelle eine Liste der schlimmsten Verstöße und schlage konkrete Fixes vor.“
+
+---
+
+Prompt 4 – Test‑Abdeckung (Phase 4)
+„Analysiere die Testabdeckung des Projekts.  
+Identifiziere kritische Pfade ohne Tests.  
+Schlage konkrete Unit‑Tests vor und generiere Test‑Skeletons.“
+
+---
+
+Prompt 5 – Performance & Skalierbarkeit (Phase 5)
+„Analysiere alle potenziellen Performance‑Bottlenecks im Projekt.  
+Fokussiere auf Resolver‑Pool, Worker, GUI‑Lazy‑Loading und DB‑Zugriffe.“
+
+---
+
+Prompt 6 – Sicherheit (Phase 6)
+„Analysiere das Projekt auf Sicherheitsrisiken:  
+– API‑Keys  
+– Secrets  
+– Input‑Validation  
+– File‑Handling  
+– Injection‑Risiken.“
+
+=======   =======
