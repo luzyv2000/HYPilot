@@ -1,11 +1,11 @@
 # Dateiname:     gui/app.py
-# Version:       2026-05-15-portfolio
+# Version:       2026-05-16-info
 # Abhängigkeiten (intern): gui.tabs.universe_tab, gui.tabs.high_yield_tab,
 #                          gui.tabs.analyse_tab, gui.tabs.watchlist_tab,
-#                          gui.tabs.portfolio_tab
+#                          gui.tabs.portfolio_tab, gui.tabs.info_tab
 # Abhängigkeiten (extern): customtkinter
 """
-gui/app.py — PortfolioTab integriert (ersetzt Platzhalter).
+gui/app.py — InfoTab als letzter Reiter ergänzt.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from gui.tabs.high_yield_tab import HighYieldTab
 from gui.tabs.analyse_tab    import AnalyseTab
 from gui.tabs.watchlist_tab  import WatchlistTab
 from gui.tabs.portfolio_tab  import PortfolioTab
+from gui.tabs.info_tab       import InfoTab
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,11 @@ class HYPilotApp(ctk.CTk):
         self._tab_view.add("Portfolio")
         self._portfolio_tab = PortfolioTab(self._tab_view.tab("Portfolio"))
         self._portfolio_tab.pack(fill="both", expand=True)
+
+        # Info
+        self._tab_view.add("Info")
+        self._info_tab = InfoTab(self._tab_view.tab("Info"))
+        self._info_tab.pack(fill="both", expand=True)
 
         # Watchlist-Referenz weiterreichen
         self._universe_tab.set_watchlist_tab(self._watchlist_tab)
