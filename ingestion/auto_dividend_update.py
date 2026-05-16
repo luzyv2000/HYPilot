@@ -1,7 +1,7 @@
 # Dateiname:     ingestion/auto_dividend_update.py
-# Version:       2026-05-09-fix1
+# Version:       2026-05-15-quality
 # Abhängigkeiten (intern): core.dividend_service, core.email_service,
-#                          db.dividend_repository
+#                          core.data_quality, db.dividend_repository
 # Abhängigkeiten (extern): keine
 """
 ingestion/auto_dividend_update.py
@@ -14,17 +14,15 @@ Ablauf:
   3. Schwellwert-Überschreitungen aus DB lesen
   4. Zusammenfassung via E-Mail senden
   5. Ergebnis in metadata speichern (GUI liest beim nächsten Start)
+  6. NEU: Datenqualitäts-Check durchführen + Bericht speichern
 
-Wird gestartet von:
-  systemd/hypilot-dividends.timer (08:00 + 13:00)
+Neu 2026-05-15:
+  run_quality_check() + save_report() am Ende jedes Laufs.
+  Fehler dürfen Daemon nicht beenden (try/except wie E-Mail).
 
 Kapazitätsplanung:
   _TOTAL_PER_RUN = 3500 → ~117 Min pro Lauf bei ~2s/ISIN
   2 Läufe/Tag × 3500 = 7000 ISINs → deckt gesamtes fälliges Universum ab
-
-Fehlerbehandlung:
-  send_batch_summary und _save_run_summary werden in try/except gekapselt —
-  ein E-Mail- oder DB-Fehler darf den Daemon nicht zum Absturz bringen.
 """
 
 from __future__ import annotations
@@ -40,7 +38,8 @@ if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
 from core.dividend_service import update_batch_due
-from core.email_service import send_batch_summary
+from core.email_service    import send_batch_summary
+from core.data_quality     import run_quality_check, save_report
 from db.dividend_repository import (
     DB_PATH,
     get_unshown_threshold_crossings,
@@ -69,7 +68,7 @@ def _setup_logging() -> None:
 
 
 def _save_run_summary(stats: dict, crossings: list[dict]) -> None:
-    """Speichert Zusammenfassung in metadata für GUI-Anzeige beim Start."""
+    """Speichert Lauf-Zusammenfassung in metadata für GUI-Anzeige."""
     import sqlite3
     summary = {
         "run_at":    datetime.now().isoformat(),
@@ -128,11 +127,11 @@ def main() -> int:
         total_stats["skipped"],
     )
 
-    # Schwellwert-Überschreitungen
+    # ── Schwellwert-Überschreitungen ──────────────────────────────────────────
     crossings = get_unshown_threshold_crossings()
     logger.info("%d neue Schwellwert-Überschreitungen.", len(crossings))
 
-    # E-Mail — Fehler darf Daemon nicht beenden
+    # ── E-Mail — Fehler darf Daemon nicht beenden ─────────────────────────────
     try:
         send_batch_summary(
             stats=total_stats,
@@ -142,11 +141,24 @@ def main() -> int:
     except Exception as exc:
         logger.error("E-Mail-Versand fehlgeschlagen: %s", exc)
 
-    # In metadata speichern — Fehler darf Daemon nicht beenden
+    # ── Lauf-Summary speichern — Fehler darf Daemon nicht beenden ────────────
     try:
         _save_run_summary(total_stats, crossings)
     except Exception as exc:
         logger.error("Run-Summary konnte nicht gespeichert werden: %s", exc)
+
+    # ── Datenqualitäts-Check — Fehler darf Daemon nicht beenden ──────────────
+    try:
+        report = run_quality_check(db_path=DB_PATH)
+        save_report(report, db_path=DB_PATH)
+        logger.info(
+            "Qualitätsbericht: Abdeckung %.1f %%, Ausreißer %d, Warnungen %d.",
+            report.coverage_pct,
+            report.outliers_above_cap,
+            len(report.warnings),
+        )
+    except Exception as exc:
+        logger.error("Datenqualitäts-Check fehlgeschlagen: %s", exc)
 
     logger.info("=" * 60)
     logger.info("ENDE: %s", run_label)
