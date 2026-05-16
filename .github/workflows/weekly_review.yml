@@ -1,0 +1,40 @@
+name: Weekly Code Review
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"   # Jeden Sonntag um 03:00
+  workflow_dispatch:
+
+jobs:
+  codeql:
+    name: CodeQL Analyse
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CodeQL initialisieren
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: CodeQL analysieren
+        uses: github/codeql-action/analyze@v3
+
+  lint:
+    name: Ruff Linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Ruff installieren
+        run: pip install ruff
+
+      - name: Ruff ausführen
+        run: ruff check .
