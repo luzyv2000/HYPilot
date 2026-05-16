@@ -1,5 +1,5 @@
 # Dateiname:     db/dividend_repository.py
-# Version:       2026-05-09-growth
+# Version:       2026-05-16-freq
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): python-dateutil
 """
@@ -8,10 +8,9 @@ db/dividend_repository.py
 Datenbankoperationen für dividend_data, dividend_history,
 threshold_crossings und Wachstumsmetriken.
 
-Neu 2026-05-09:
-  GrowthMetrics  — Datenklasse für Dividenden-Wachstumsanalyse
-  get_growth_metrics_bulk()  — einmaliger Abruf für alle ISINs (Tabellen)
-  get_growth_metrics()       — Einzelabruf pro ISIN (Detail-Panel)
+Neu 2026-05-16:
+  get_unshown_threshold_crossings() liefert jetzt auch das
+  frequency-Feld aus dividend_data — wird für E-Mail-Spalte genutzt.
 """
 
 from __future__ import annotations
@@ -436,14 +435,21 @@ def get_isins_without_dividend_data(
 def get_unshown_threshold_crossings(
     db_path: Path = DB_PATH,
 ) -> list[dict]:
+    """
+    Gibt ungesehene Schwellwert-Überschreitungen zurück.
+    Enthält jetzt auch das frequency-Feld aus dividend_data
+    für die E-Mail-Spalte und den GUI-Popup.
+    """
     with _get_connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT tc.id, tc.isin, tc.yield_bps_old, tc.yield_bps_new,
                    tc.direction, tc.detected_at,
-                   COALESCE(i.name_override, i.name) AS display_name
+                   COALESCE(i.name_override, i.name) AS display_name,
+                   d.frequency
             FROM threshold_crossings tc
             JOIN instruments i ON i.isin = tc.isin
+            LEFT JOIN dividend_data d ON d.isin = tc.isin
             WHERE tc.shown_at IS NULL
             ORDER BY tc.direction DESC, tc.yield_bps_new DESC
             """,
