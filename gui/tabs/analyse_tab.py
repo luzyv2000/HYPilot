@@ -1,33 +1,24 @@
 # Dateiname:     gui/tabs/analyse_tab.py
-# Version:       2026-05-11
+# Version:       2026-05-15-quality
 # Abhängigkeiten (intern): db.dividend_repository, analysis.scorer,
-#                          analysis.rules
+#                          analysis.rules, core.data_quality
 # Abhängigkeiten (extern): customtkinter
 """
 gui/tabs/analyse_tab.py
 
-Analyse-Tab mit fünf Bereichen:
+Analyse-Tab mit sechs Bereichen:
 
   1. Scoring-Verteilung    — Balkendiagramm STRONG_BUY/BUY/WATCH/REJECT
   2. Top-20 Score          — Instrumente mit höchstem Gesamtscore
-  3. Wachstums-Highlights  — stärkstes YoY-Dividendenwachstum (≥5%,
-                             keine Kürzung in der Historie)
+  3. Wachstums-Highlights  — stärkstes YoY-Dividendenwachstum
   4. Threshold-Crossings   — Überschreitungen der 10%-Grenze (30 Tage)
   5. Datenstand & Quellen  — KPIs + Quellenverteilung
+  6. NEU: Datenqualität    — letzter Qualitätsbericht aus metadata
 
-Änderungen 2026-05-11:
-  - Sektion 4 (Threshold-Crossings) ergänzt
-  - Sektion 5 (Datenstand & Quellen) ergänzt
-  - _load_analyse_data() lädt Crossings + KPIs zusätzlich
-  - AnalyseData um crossings, totals, sources erweitert
-
-Alle Daten werden einmalig im Hintergrund-Thread geladen.
-Kein Netzwerk-Call, kein yfinance — ausschließlich DB-Lesen + Scoring.
-
-Architektur-Entscheidungen:
-  - Balkendiagramm via tkinter Canvas (kein matplotlib/plotly nötig)
-  - Daten-Lade-Thread gibt AnalyseData-Dataclass via Queue zurück
-  - Fünf Sektionen in einem CTkScrollableFrame — kein Tab-in-Tab
+Änderungen 2026-05-15:
+  - Sektion 6 (Datenqualität) ergänzt
+  - _load_analyse_data() lädt QualityReport zusätzlich
+  - AnalyseData um quality_report erweitert
 """
 
 from __future__ import annotations
@@ -53,55 +44,46 @@ DB_PATH: Path = Path("/home/luzy/workspace/openclaw-min/db/hypilot.db")
 # ── Farbpalette ───────────────────────────────────────────────────────────────
 
 _RATING_COLORS_DARK = {
-    "STRONG_BUY": "#66bb6a",
-    "BUY":        "#aed581",
-    "WATCH":      "#ffb74d",
-    "REJECT":     "#ef5350",
+    "STRONG_BUY": "#66bb6a", "BUY": "#aed581",
+    "WATCH": "#ffb74d",      "REJECT": "#ef5350",
 }
 _RATING_COLORS_LIGHT = {
-    "STRONG_BUY": "#1b5e20",
-    "BUY":        "#558b2f",
-    "WATCH":      "#e65100",
-    "REJECT":     "#b71c1c",
+    "STRONG_BUY": "#1b5e20", "BUY": "#558b2f",
+    "WATCH": "#e65100",      "REJECT": "#b71c1c",
 }
 
 _RATING_ORDER = ["STRONG_BUY", "BUY", "WATCH", "REJECT"]
 _RATING_LABEL = {
-    "STRONG_BUY": "STRONG BUY",
-    "BUY":        "BUY",
-    "WATCH":      "WATCH",
-    "REJECT":     "REJECT",
+    "STRONG_BUY": "STRONG BUY", "BUY": "BUY",
+    "WATCH": "WATCH",           "REJECT": "REJECT",
 }
 
 
-# ── Datenmodell ───────────────────────────────────────────────────────────────
+# ── Datenmodelle ──────────────────────────────────────────────────────────────
 
 @dataclass
 class TopEntry:
-    """Ein Eintrag in der Top-20 oder Wachstums-Liste."""
     name:      str
     isin:      str
     score:     int
     rating:    str
-    yield_pct: str   # z.B. "12.34 %"
-    frequency: str   # z.B. "monatlich"
-    yoy_pct:   str   # z.B. "+7.2 %" oder "—"
+    yield_pct: str
+    frequency: str
+    yoy_pct:   str
 
 
 @dataclass
 class CrossingEntry:
-    """Ein Threshold-Crossing-Ereignis."""
-    direction:    str   # "up" | "down"
-    name:         str
-    isin:         str
-    yield_old:    str
-    yield_new:    str
-    detected_at:  str
+    direction:   str
+    name:        str
+    isin:        str
+    yield_old:   str
+    yield_new:   str
+    detected_at: str
 
 
 @dataclass
 class AnalyseData:
-    """Alle Daten für den Analyse-Tab, einmal berechnet."""
     rating_counts: dict[str, int]
     top20:         list[TopEntry]
     growth_top10:  list[TopEntry]
@@ -110,6 +92,7 @@ class AnalyseData:
     sources:       list[dict]
     total_scored:  int
     load_time_ms:  int
+    quality_report: Any | None = None   # QualityReport oder None
 
 
 # ── Datenabruf ────────────────────────────────────────────────────────────────
@@ -132,26 +115,20 @@ _QUERY_ALL = """
 
 
 def _freq_display(freq: str | None) -> str:
-    mapping = {
-        "monthly":     "monatlich",
-        "quarterly":   "quartalsw.",
-        "semi_annual": "halbjährl.",
-        "annual":      "jährlich",
-        "irregular":   "unregel.",
-    }
-    return mapping.get(freq or "", "—")
+    return {
+        "monthly": "monatlich", "quarterly": "quartalsw.",
+        "semi_annual": "halbjährl.", "annual": "jährlich",
+        "irregular": "unregel.",
+    }.get(freq or "", "—")
 
 
 def _load_analyse_data() -> AnalyseData:
-    """
-    Lädt und berechnet alle Analyse-Daten.
-    Läuft im Hintergrund-Thread — kein GUI-Zugriff.
-    """
     import time as _time
     t0 = _time.monotonic()
 
     from analysis.scorer import score_dividend_snapshot
     from core.dividend_source import DividendSnapshot
+    from core.data_quality import load_report
     from db.dividend_repository import get_growth_metrics_bulk
 
     growth_map = get_growth_metrics_bulk(db_path=DB_PATH)
@@ -164,16 +141,12 @@ def _load_analyse_data() -> AnalyseData:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(_QUERY_ALL).fetchall()
 
-            # ── Threshold-Crossings (30 Tage) ─────────────────────────────────
             cutoff = (date.today() - timedelta(days=30)).isoformat()
             crossing_rows = conn.execute("""
-                SELECT
-                    tc.direction,
-                    tc.yield_bps_old,
-                    tc.yield_bps_new,
-                    tc.detected_at,
-                    COALESCE(i.name_override, i.name) AS name,
-                    tc.isin
+                SELECT tc.direction, tc.yield_bps_old, tc.yield_bps_new,
+                       tc.detected_at,
+                       COALESCE(i.name_override, i.name) AS name,
+                       tc.isin
                 FROM threshold_crossings tc
                 JOIN instruments i ON i.isin = tc.isin
                 WHERE tc.detected_at >= ?
@@ -181,7 +154,6 @@ def _load_analyse_data() -> AnalyseData:
                 LIMIT 50
             """, (cutoff,)).fetchall()
 
-            # ── KPIs ───────────────────────────────────────────────────────────
             total_instr = conn.execute(
                 "SELECT COUNT(*) FROM instruments"
             ).fetchone()[0]
@@ -196,7 +168,6 @@ def _load_analyse_data() -> AnalyseData:
                 "WHERE yield_bps >= 1000 AND yield_bps <= 5000"
             ).fetchone()[0]
 
-            # ── Quellen ────────────────────────────────────────────────────────
             source_rows = conn.execute("""
                 SELECT data_source, COUNT(*) AS n
                 FROM dividend_data
@@ -227,7 +198,6 @@ def _load_analyse_data() -> AnalyseData:
             )
             metrics = growth_map.get(row["isin"])
             score   = score_dividend_snapshot(snapshot, growth_metrics=metrics)
-
             rating_counts[score.rating] = rating_counts.get(score.rating, 0) + 1
 
             yoy_str = "—"
@@ -240,25 +210,19 @@ def _load_analyse_data() -> AnalyseData:
                 f"{row['yield_bps'] / 100.0:.2f} %"
                 if row["yield_bps"] else "—"
             )
-
             all_entries.append(TopEntry(
-                name=row["display_name"],
-                isin=row["isin"],
-                score=score.total,
-                rating=score.rating,
+                name=row["display_name"], isin=row["isin"],
+                score=score.total, rating=score.rating,
                 yield_pct=yield_str,
                 frequency=_freq_display(row["frequency"]),
                 yoy_pct=yoy_str,
             ))
-
         except Exception:
             logger.debug("Scoring fehlgeschlagen für %s.", row["isin"])
             continue
 
-    # ── Top-20 nach Gesamtscore ───────────────────────────────────────────────
     top20 = sorted(all_entries, key=lambda e: e.score, reverse=True)[:20]
 
-    # ── Wachstums-Top-10 ─────────────────────────────────────────────────────
     growth_candidates = [
         e for e in all_entries
         if (
@@ -275,32 +239,30 @@ def _load_analyse_data() -> AnalyseData:
         reverse=True,
     )[:10]
 
-    # ── Crossings aufbereiten ─────────────────────────────────────────────────
     crossings: list[CrossingEntry] = []
     for cr in crossing_rows:
         old = f"{cr['yield_bps_old']/100:.1f}%" if cr["yield_bps_old"] else "—"
         new = f"{cr['yield_bps_new']/100:.1f}%"
         crossings.append(CrossingEntry(
-            direction=cr["direction"],
-            name=cr["name"],
-            isin=cr["isin"],
-            yield_old=old,
-            yield_new=new,
+            direction=cr["direction"], name=cr["name"], isin=cr["isin"],
+            yield_old=old, yield_new=new,
             detected_at=str(cr["detected_at"])[:10],
         ))
+
+    # ── Qualitätsbericht laden ─────────────────────────────────────────────────
+    quality_report = None
+    try:
+        quality_report = load_report(db_path=DB_PATH)
+    except Exception:
+        logger.debug("Qualitätsbericht konnte nicht geladen werden.")
 
     elapsed_ms = int((_time.monotonic() - t0) * 1000)
 
     logger.info(
-        "Analyse: %d Instrumente bewertet in %d ms. "
-        "Verteilung: SB=%d B=%d W=%d R=%d  |  "
-        "Crossings (30d): %d",
+        "Analyse: %d Instrumente in %d ms. SB=%d B=%d W=%d R=%d",
         len(all_entries), elapsed_ms,
-        rating_counts.get("STRONG_BUY", 0),
-        rating_counts.get("BUY", 0),
-        rating_counts.get("WATCH", 0),
-        rating_counts.get("REJECT", 0),
-        len(crossings),
+        rating_counts.get("STRONG_BUY", 0), rating_counts.get("BUY", 0),
+        rating_counts.get("WATCH", 0),      rating_counts.get("REJECT", 0),
     )
 
     return AnalyseData(
@@ -309,25 +271,19 @@ def _load_analyse_data() -> AnalyseData:
         growth_top10=growth_top10,
         crossings=crossings,
         totals={
-            "instruments": total_instr,
-            "with_data":   with_data,
-            "with_yield":  with_yield,
-            "high_yield":  high_yield,
+            "instruments": total_instr, "with_data": with_data,
+            "with_yield": with_yield,   "high_yield": high_yield,
         },
         sources=[dict(r) for r in source_rows],
         total_scored=len(all_entries),
         load_time_ms=elapsed_ms,
+        quality_report=quality_report,
     )
 
 
 # ── Balkendiagramm ────────────────────────────────────────────────────────────
 
 class _RatingChart(ctk.CTkFrame):
-    """
-    Einfaches horizontales Balkendiagramm via tkinter Canvas.
-    Keine externen Bibliotheken nötig.
-    """
-
     _BAR_HEIGHT  = 32
     _BAR_GAP     = 12
     _LABEL_WIDTH = 120
@@ -344,12 +300,10 @@ class _RatingChart(ctk.CTkFrame):
         self._canvas.pack(fill="both", expand=True, padx=8, pady=8)
 
     def render(self, rating_counts: dict[str, int], total: int) -> None:
-        """Zeichnet die Balken für die gegebene Verteilung."""
         self._canvas.delete("all")
         if total == 0:
-            self._canvas.create_text(
-                100, 40, text="Keine Daten", fill="gray", font=("", 11)
-            )
+            self._canvas.create_text(100, 40, text="Keine Daten",
+                                      fill="gray", font=("", 11))
             return
 
         dark   = ctk.get_appearance_mode() == "Dark"
@@ -370,29 +324,21 @@ class _RatingChart(ctk.CTkFrame):
             bar_w = int(bar_max_w * count / max_count) if max_count > 0 else 0
 
             self._canvas.create_text(
-                self._PADDING,
-                y + self._BAR_HEIGHT // 2,
-                text=_RATING_LABEL[rating],
-                anchor="w",
-                fill=fg,
-                font=("", 10, "bold"),
+                self._PADDING, y + self._BAR_HEIGHT // 2,
+                text=_RATING_LABEL[rating], anchor="w",
+                fill=fg, font=("", 10, "bold"),
             )
-
             x0 = self._PADDING + self._LABEL_WIDTH
             x1 = x0 + max(bar_w, 4)
             self._canvas.create_rectangle(
                 x0, y, x1, y + self._BAR_HEIGHT,
                 fill=colors[rating], outline="",
             )
-
             pct = count / total * 100 if total > 0 else 0
             self._canvas.create_text(
-                x1 + 8,
-                y + self._BAR_HEIGHT // 2,
+                x1 + 8, y + self._BAR_HEIGHT // 2,
                 text=f"{count:,}  ({pct:.0f}%)",
-                anchor="w",
-                fill=fg,
-                font=("", 10),
+                anchor="w", fill=fg, font=("", 10),
             )
             y += self._BAR_HEIGHT + self._BAR_GAP
 
@@ -405,62 +351,49 @@ def _build_entry_table(
     master: Any,
     columns: list[tuple[str, str, int, str]],
 ) -> ttk.Treeview:
-    """Erstellt ein einheitliches Treeview für Top-Listen."""
     dark    = ctk.get_appearance_mode() == "Dark"
     bg      = "#2b2b2b" if dark else "#f9f9f9"
     fg      = "#e0e0e0" if dark else "#1a1a1a"
     head_bg = "#1c1c1c" if dark else "#dcdcdc"
     head_fg = "#c8c8c8" if dark else "#333333"
 
-    col_ids = [c[0] for c in columns]
-    tree    = ttk.Treeview(
-        master, columns=col_ids, show="headings",
-        selectmode="browse", height=10,
-    )
-
+    col_ids    = [c[0] for c in columns]
+    tree       = ttk.Treeview(master, columns=col_ids, show="headings",
+                               selectmode="browse", height=10)
     style      = ttk.Style()
     style_name = f"Analyse{id(tree)}.Treeview"
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
-
-    style.configure(
-        style_name,
-        background=bg, foreground=fg, fieldbackground=bg,
-        borderwidth=0, rowheight=26,
-    )
-    style.configure(
-        f"{style_name}.Heading",
-        background=head_bg, foreground=head_fg,
-        relief="flat", borderwidth=1, padding=(4, 3),
-    )
-    style.map(
-        style_name,
-        background=[("selected", "#1f6aa5")],
-        foreground=[("selected", "#ffffff")],
-    )
+    style.configure(style_name, background=bg, foreground=fg,
+                    fieldbackground=bg, borderwidth=0, rowheight=26)
+    style.configure(f"{style_name}.Heading", background=head_bg,
+                    foreground=head_fg, relief="flat", borderwidth=1,
+                    padding=(4, 3))
+    style.map(style_name, background=[("selected", "#1f6aa5")],
+              foreground=[("selected", "#ffffff")])
     tree.configure(style=style_name)
 
     for col_id, heading, width, anchor in columns:
         tree.column(col_id, width=width, anchor=anchor, stretch=False)
         tree.heading(col_id, text=heading)
 
-    dark = ctk.get_appearance_mode() == "Dark"
     tree.tag_configure("STRONG_BUY", foreground="#66bb6a" if dark else "#1b5e20")
     tree.tag_configure("BUY",        foreground="#aed581" if dark else "#558b2f")
     tree.tag_configure("WATCH",      foreground="#ffb74d" if dark else "#e65100")
     tree.tag_configure("REJECT",     foreground="#ef5350" if dark else "#b71c1c")
     tree.tag_configure("up",         foreground="#66bb6a" if dark else "#1b5e20")
     tree.tag_configure("down",       foreground="#ef5350" if dark else "#b71c1c")
-
+    tree.tag_configure("warn",       foreground="#ffb74d" if dark else "#e65100")
+    tree.tag_configure("ok",         foreground="#66bb6a" if dark else "#1b5e20")
     return tree
 
 
 # ── Hauptklasse ───────────────────────────────────────────────────────────────
 
 class AnalyseTab(ctk.CTkFrame):
-    """Analyse-Tab mit Scoring-Verteilung, Top-20, Wachstum, Crossings, KPIs."""
+    """Analyse-Tab mit Scoring, Top-20, Wachstum, Crossings, KPIs, Qualität."""
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -491,8 +424,7 @@ class AnalyseTab(ctk.CTkFrame):
         self._status_label = ctk.CTkLabel(
             bar, text="Lade …",
             text_color=("gray45", "gray65"),
-            font=ctk.CTkFont(size=11),
-            anchor="w",
+            font=ctk.CTkFont(size=11), anchor="w",
         )
         self._status_label.pack(side="left", padx=(8, 0))
 
@@ -504,35 +436,31 @@ class AnalyseTab(ctk.CTkFrame):
         scroll.grid_columnconfigure(0, weight=1)
         self._scroll = scroll
 
-        # ── 1. Scoring-Verteilung ─────────────────────────────────────────────
+        # 1. Scoring-Verteilung
         self._build_section_header(scroll, 0, "📊  Scoring-Verteilung")
         self._chart = _RatingChart(scroll, height=200)
         self._chart.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 16))
 
-        # ── 2. Top-20 Score ───────────────────────────────────────────────────
+        # 2. Top-20
         self._build_section_header(scroll, 2, "🏆  Top-20 nach Gesamtscore")
         top20_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         top20_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 16))
         top20_frame.grid_columnconfigure(0, weight=1)
-
-        self._top20_tree = _build_entry_table(
-            top20_frame,
-            [
-                ("rank",   "#",          36,  "center"),
-                ("name",   "Wertpapier", 320, "w"),
-                ("score",  "Score",       70, "center"),
-                ("rating", "Rating",      90, "center"),
-                ("yield",  "Rendite",     80, "e"),
-                ("freq",   "Frequenz",    90, "center"),
-            ],
-        )
+        self._top20_tree = _build_entry_table(top20_frame, [
+            ("rank",   "#",          36,  "center"),
+            ("name",   "Wertpapier", 320, "w"),
+            ("score",  "Score",       70, "center"),
+            ("rating", "Rating",      90, "center"),
+            ("yield",  "Rendite",     80, "e"),
+            ("freq",   "Frequenz",    90, "center"),
+        ])
         vsb1 = ttk.Scrollbar(top20_frame, orient="vertical",
                               command=self._top20_tree.yview)
         self._top20_tree.configure(yscrollcommand=vsb1.set)
         self._top20_tree.grid(row=0, column=0, sticky="ew")
         vsb1.grid(row=0, column=1, sticky="ns")
 
-        # ── 3. Wachstums-Highlights ───────────────────────────────────────────
+        # 3. Wachstums-Highlights
         self._build_section_header(
             scroll, 4,
             "🌱  Wachstums-Highlights  (≥5% YoY, keine Kürzung, ≥2 Jahre)",
@@ -540,117 +468,165 @@ class AnalyseTab(ctk.CTkFrame):
         growth_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         growth_frame.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 16))
         growth_frame.grid_columnconfigure(0, weight=1)
-
-        self._growth_tree = _build_entry_table(
-            growth_frame,
-            [
-                ("rank",  "#",          36,  "center"),
-                ("name",  "Wertpapier", 300, "w"),
-                ("yoy",   "YoY",         80, "e"),
-                ("score", "Score",        70, "center"),
-                ("yield", "Rendite",      80, "e"),
-                ("freq",  "Frequenz",     90, "center"),
-            ],
-        )
+        self._growth_tree = _build_entry_table(growth_frame, [
+            ("rank",  "#",          36,  "center"),
+            ("name",  "Wertpapier", 300, "w"),
+            ("yoy",   "YoY",         80, "e"),
+            ("score", "Score",        70, "center"),
+            ("yield", "Rendite",      80, "e"),
+            ("freq",  "Frequenz",     90, "center"),
+        ])
         vsb2 = ttk.Scrollbar(growth_frame, orient="vertical",
                               command=self._growth_tree.yview)
         self._growth_tree.configure(yscrollcommand=vsb2.set)
         self._growth_tree.grid(row=0, column=0, sticky="ew")
         vsb2.grid(row=0, column=1, sticky="ns")
 
-        # ── 4. Threshold-Crossings ────────────────────────────────────────────
+        # 4. Threshold-Crossings
         self._build_section_header(
             scroll, 6, "⚡  Threshold-Crossings  (letzte 30 Tage)"
         )
         cross_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         cross_frame.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 16))
         cross_frame.grid_columnconfigure(0, weight=1)
-
         self._cross_summary = ctk.CTkLabel(
             cross_frame, text="",
-            font=ctk.CTkFont(size=11),
-            anchor="w",
+            font=ctk.CTkFont(size=11), anchor="w",
             text_color=("gray40", "gray70"),
         )
         self._cross_summary.grid(row=0, column=0, sticky="w", pady=(0, 6))
-
-        self._cross_tree = _build_entry_table(
-            cross_frame,
-            [
-                ("dir",   "Richtung",    90,  "center"),
-                ("name",  "Wertpapier",  280, "w"),
-                ("old",   "Alt",          80, "e"),
-                ("new",   "Neu",          80, "e"),
-                ("date",  "Erkannt am",  110, "center"),
-            ],
-        )
+        self._cross_tree = _build_entry_table(cross_frame, [
+            ("dir",  "Richtung",   90,  "center"),
+            ("name", "Wertpapier", 280, "w"),
+            ("old",  "Alt",         80, "e"),
+            ("new",  "Neu",         80, "e"),
+            ("date", "Erkannt am", 110, "center"),
+        ])
         vsb3 = ttk.Scrollbar(cross_frame, orient="vertical",
                               command=self._cross_tree.yview)
         self._cross_tree.configure(yscrollcommand=vsb3.set)
         self._cross_tree.grid(row=1, column=0, sticky="ew")
         vsb3.grid(row=1, column=1, sticky="ns")
 
-        # ── 5. Datenstand & Quellen ───────────────────────────────────────────
+        # 5. Datenstand & Quellen
         self._build_section_header(scroll, 8, "📦  Datenstand & Quellen")
         kpi_frame = ctk.CTkFrame(scroll, fg_color="transparent")
-        kpi_frame.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 24))
+        kpi_frame.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 16))
         kpi_frame.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self._kpi_labels: dict[str, ctk.CTkLabel] = {}
-        kpis = [
+        for col_idx, (key, label) in enumerate([
             ("instruments", "Instrumente gesamt"),
             ("with_data",   "Mit Dividendendaten"),
             ("with_yield",  "Mit Rendite > 0"),
             ("high_yield",  "High-Yield ≥ 10%"),
-        ]
-        for col_idx, (key, label) in enumerate(kpis):
-            kpi_cell = ctk.CTkFrame(kpi_frame, corner_radius=6)
-            kpi_cell.grid(row=0, column=col_idx, padx=4, pady=4, sticky="nsew")
-            ctk.CTkLabel(
-                kpi_cell, text=label,
-                font=ctk.CTkFont(size=10),
-                text_color=("gray45", "gray65"),
-                anchor="center",
-            ).pack(padx=8, pady=(8, 2))
-            val_lbl = ctk.CTkLabel(
-                kpi_cell, text="—",
-                font=ctk.CTkFont(size=18, weight="bold"),
-                anchor="center",
-            )
+        ]):
+            cell = ctk.CTkFrame(kpi_frame, corner_radius=6)
+            cell.grid(row=0, column=col_idx, padx=4, pady=4, sticky="nsew")
+            ctk.CTkLabel(cell, text=label, font=ctk.CTkFont(size=10),
+                          text_color=("gray45", "gray65"),
+                          anchor="center").pack(padx=8, pady=(8, 2))
+            val_lbl = ctk.CTkLabel(cell, text="—",
+                                    font=ctk.CTkFont(size=18, weight="bold"),
+                                    anchor="center")
             val_lbl.pack(padx=8, pady=(0, 8))
             self._kpi_labels[key] = val_lbl
 
-        # Quellen-Liste
         self._source_labels: list[ctk.CTkLabel] = []
         src_row = ctk.CTkFrame(kpi_frame, fg_color="transparent")
         src_row.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         src_row.grid_columnconfigure(0, weight=1)
         for i in range(5):
-            lbl = ctk.CTkLabel(
-                src_row, text="",
-                font=ctk.CTkFont(size=11),
-                anchor="w",
-                text_color=("gray40", "gray70"),
-            )
+            lbl = ctk.CTkLabel(src_row, text="",
+                                font=ctk.CTkFont(size=11), anchor="w",
+                                text_color=("gray40", "gray70"))
             lbl.grid(row=i, column=0, sticky="w", pady=1)
             self._source_labels.append(lbl)
 
-    def _build_section_header(
-        self, parent: Any, row: int, text: str
-    ) -> None:
+        # 6. Datenqualität
+        self._build_section_header(scroll, 10, "🔍  Datenqualität")
+        quality_frame = ctk.CTkFrame(scroll, fg_color="transparent")
+        quality_frame.grid(row=11, column=0, sticky="ew", padx=8, pady=(0, 24))
+        quality_frame.grid_columnconfigure(0, weight=1)
+
+        self._quality_ts_label = ctk.CTkLabel(
+            quality_frame, text="Kein Bericht vorhanden.",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray45", "gray65"), anchor="w",
+        )
+        self._quality_ts_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
+
+        # Metriken-Grid (2 Spalten)
+        self._quality_metric_frame = ctk.CTkFrame(
+            quality_frame, fg_color="transparent"
+        )
+        self._quality_metric_frame.grid(
+            row=1, column=0, sticky="ew", pady=(0, 8)
+        )
+        self._quality_metric_frame.grid_columnconfigure((0, 1), weight=1)
+        self._quality_metric_labels: dict[str, ctk.CTkLabel] = {}
+
+        metrics_def = [
+            ("coverage",     "Abdeckung",           0, 0),
+            ("outliers",     "Ausreißer (>Cap)",     0, 1),
+            ("stale",        "Veraltet (>7 Tage)",   1, 0),
+            ("skip_active",  "Pausiert (18-Monats)", 1, 1),
+            ("zero_yield",   "Nullrenditen",          2, 0),
+            ("unresolvable", "Unresolvable Ticker",   2, 1),
+        ]
+        for key, label, mrow, mcol in metrics_def:
+            cell = ctk.CTkFrame(
+                self._quality_metric_frame,
+                corner_radius=6,
+                fg_color=("gray90", "gray20"),
+            )
+            cell.grid(row=mrow, column=mcol, padx=4, pady=4, sticky="nsew")
+            ctk.CTkLabel(
+                cell, text=label,
+                font=ctk.CTkFont(size=10),
+                text_color=("gray45", "gray65"), anchor="w",
+            ).pack(padx=10, pady=(6, 2), anchor="w")
+            val = ctk.CTkLabel(
+                cell, text="—",
+                font=ctk.CTkFont(size=14, weight="bold"), anchor="w",
+            )
+            val.pack(padx=10, pady=(0, 6), anchor="w")
+            self._quality_metric_labels[key] = val
+
+        # Warnungen
+        self._quality_warn_label = ctk.CTkLabel(
+            quality_frame, text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray70"),
+            anchor="w", wraplength=700, justify="left",
+        )
+        self._quality_warn_label.grid(row=2, column=0, sticky="w")
+
+        # Ausreißer-Liste
+        self._outlier_frame = ctk.CTkFrame(quality_frame, fg_color="transparent")
+        self._outlier_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self._outlier_frame.grid_columnconfigure(0, weight=1)
+        self._outlier_labels: list[ctk.CTkLabel] = []
+        for i in range(10):
+            lbl = ctk.CTkLabel(
+                self._outlier_frame, text="",
+                font=ctk.CTkFont(size=11),
+                text_color=("firebrick3", "#ef5350"), anchor="w",
+            )
+            lbl.grid(row=i, column=0, sticky="w")
+            self._outlier_labels.append(lbl)
+
+    def _build_section_header(self, parent: Any, row: int, text: str) -> None:
         frame = ctk.CTkFrame(parent, fg_color="transparent")
         frame.grid(row=row, column=0, sticky="ew", padx=8, pady=(8, 4))
         frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            frame, text=text,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-
-        ctk.CTkFrame(
-            frame, height=1, fg_color=("gray70", "gray40")
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        ctk.CTkLabel(frame, text=text,
+                      font=ctk.CTkFont(size=13, weight="bold"),
+                      anchor="w").grid(row=0, column=0, sticky="w")
+        ctk.CTkFrame(frame, height=1,
+                      fg_color=("gray70", "gray40")).grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0)
+        )
 
     # ── Datenladen ────────────────────────────────────────────────────────────
 
@@ -684,7 +660,6 @@ class AnalyseTab(ctk.CTkFrame):
 
     def _render(self, data: AnalyseData) -> None:
         self._data = data
-
         self._status_label.configure(
             text=(
                 f"{data.total_scored:,} Instrumente bewertet  |  "
@@ -692,7 +667,7 @@ class AnalyseTab(ctk.CTkFrame):
             )
         )
 
-        # Chart (nach kurzem Delay damit Canvas-Breite bekannt ist)
+        # Chart
         self.after(50, lambda: self._chart.render(
             data.rating_counts, data.total_scored
         ))
@@ -701,37 +676,28 @@ class AnalyseTab(ctk.CTkFrame):
         self._top20_tree.delete(*self._top20_tree.get_children())
         for rank, entry in enumerate(data.top20, 1):
             name = entry.name[:45] + "…" if len(entry.name) > 45 else entry.name
-            self._top20_tree.insert(
-                "", "end",
-                values=(
-                    rank, name, entry.score,
-                    _RATING_LABEL[entry.rating],
-                    entry.yield_pct, entry.frequency,
-                ),
-                tags=(entry.rating,),
-            )
+            self._top20_tree.insert("", "end", values=(
+                rank, name, entry.score,
+                _RATING_LABEL[entry.rating],
+                entry.yield_pct, entry.frequency,
+            ), tags=(entry.rating,))
 
-        # Wachstums-Highlights
+        # Wachstum
         self._growth_tree.delete(*self._growth_tree.get_children())
         if not data.growth_top10:
-            self._growth_tree.insert(
-                "", "end",
-                values=("—", "Keine Instrumente erfüllen die Kriterien",
-                        "—", "—", "—", "—"),
-            )
+            self._growth_tree.insert("", "end", values=(
+                "—", "Keine Instrumente erfüllen die Kriterien",
+                "—", "—", "—", "—",
+            ))
         else:
             for rank, entry in enumerate(data.growth_top10, 1):
                 name = entry.name[:40] + "…" if len(entry.name) > 40 else entry.name
-                self._growth_tree.insert(
-                    "", "end",
-                    values=(
-                        rank, name, entry.yoy_pct,
-                        entry.score, entry.yield_pct, entry.frequency,
-                    ),
-                    tags=(entry.rating,),
-                )
+                self._growth_tree.insert("", "end", values=(
+                    rank, name, entry.yoy_pct,
+                    entry.score, entry.yield_pct, entry.frequency,
+                ), tags=(entry.rating,))
 
-        # Threshold-Crossings
+        # Crossings
         self._cross_tree.delete(*self._cross_tree.get_children())
         up_n   = sum(1 for c in data.crossings if c.direction == "up")
         down_n = sum(1 for c in data.crossings if c.direction == "down")
@@ -742,27 +708,23 @@ class AnalyseTab(ctk.CTkFrame):
             )
         )
         if not data.crossings:
-            self._cross_tree.insert(
-                "", "end",
-                values=("—", "Keine Crossings in den letzten 30 Tagen",
-                        "—", "—", "—"),
-            )
+            self._cross_tree.insert("", "end", values=(
+                "—", "Keine Crossings in den letzten 30 Tagen",
+                "—", "—", "—",
+            ))
         else:
             for cr in data.crossings:
                 arrow = "▲  Neu über 10%" if cr.direction == "up" \
                         else "▼  Neu unter 10%"
                 name  = cr.name[:35] + "…" if len(cr.name) > 35 else cr.name
-                self._cross_tree.insert(
-                    "", "end",
-                    values=(arrow, name, cr.yield_old, cr.yield_new, cr.detected_at),
-                    tags=(cr.direction,),
-                )
+                self._cross_tree.insert("", "end", values=(
+                    arrow, name, cr.yield_old, cr.yield_new, cr.detected_at,
+                ), tags=(cr.direction,))
 
         # KPIs
         for key, lbl in self._kpi_labels.items():
             lbl.configure(text=f"{data.totals.get(key, 0):,}")
 
-        # Quellen
         total_src = sum(s["n"] for s in data.sources) or 1
         for i, lbl in enumerate(self._source_labels):
             if i < len(data.sources):
@@ -771,5 +733,87 @@ class AnalyseTab(ctk.CTkFrame):
                 lbl.configure(
                     text=f"{s['data_source']:<25}  {s['n']:>6,}  ({pct:.0f}%)"
                 )
+            else:
+                lbl.configure(text="")
+
+        # Sektion 6: Datenqualität
+        self._render_quality(data.quality_report)
+
+    def _render_quality(self, report: Any) -> None:
+        """Rendert Sektion 6 aus einem QualityReport oder zeigt Platzhalter."""
+        if report is None:
+            self._quality_ts_label.configure(
+                text="Kein Qualitätsbericht vorhanden — "
+                     "wird nach dem nächsten Auto-Lauf erstellt."
+            )
+            for lbl in self._quality_metric_labels.values():
+                lbl.configure(text="—")
+            self._quality_warn_label.configure(text="")
+            for lbl in self._outlier_labels:
+                lbl.configure(text="")
+            return
+
+        # Timestamp
+        ts = report.generated_at[:16].replace("T", "  ")
+        self._quality_ts_label.configure(
+            text=f"Letzter Bericht: {ts}"
+        )
+
+        # Metriken
+        dark = ctk.get_appearance_mode() == "Dark"
+        ok_color   = "#66bb6a" if dark else "#1b5e20"
+        warn_color = "#ffb74d" if dark else "#e65100"
+        err_color  = "#ef5350" if dark else "#b71c1c"
+
+        def _col(val: int, warn_threshold: int = 1) -> str:
+            if val == 0:
+                return ok_color
+            if val < warn_threshold * 10:
+                return warn_color
+            return err_color
+
+        cov = report.coverage_pct
+        self._quality_metric_labels["coverage"].configure(
+            text=f"{cov:.1f} %",
+            text_color=ok_color if cov >= 80 else warn_color,
+        )
+        self._quality_metric_labels["outliers"].configure(
+            text=str(report.outliers_above_cap),
+            text_color=ok_color if report.outliers_above_cap == 0 else err_color,
+        )
+        self._quality_metric_labels["stale"].configure(
+            text=f"{report.stale_entries:,}",
+            text_color=_col(report.stale_entries, 500),
+        )
+        self._quality_metric_labels["skip_active"].configure(
+            text=f"{report.skip_until_active:,}",
+            text_color=("gray60" if dark else "gray40"),
+        )
+        self._quality_metric_labels["zero_yield"].configure(
+            text=f"{report.zero_yield:,}",
+            text_color=_col(report.zero_yield, 200),
+        )
+        self._quality_metric_labels["unresolvable"].configure(
+            text=f"{report.unresolvable_tickers:,}",
+            text_color=_col(report.unresolvable_tickers, 50),
+        )
+
+        # Warnungen
+        if report.warnings:
+            warn_text = "  ⚠  " + "\n  ⚠  ".join(report.warnings)
+            self._quality_warn_label.configure(
+                text=warn_text,
+                text_color=warn_color,
+            )
+        else:
+            self._quality_warn_label.configure(
+                text="✓  Keine Qualitätswarnungen.",
+                text_color=ok_color,
+            )
+
+        # Ausreißer-Liste
+        for i, lbl in enumerate(self._outlier_labels):
+            if i < len(report.outlier_isins):
+                lbl.configure(text=f"  • {report.outlier_isins[i]}")
             else:
                 lbl.configure(text="")
