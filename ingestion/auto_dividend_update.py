@@ -1,5 +1,5 @@
 # Dateiname:     ingestion/auto_dividend_update.py
-# Version:       2026-05-15-quality
+# Version:       2026-05-15-quality-fix1
 # Abhängigkeiten (intern): core.dividend_service, core.email_service,
 #                          core.data_quality, db.dividend_repository
 # Abhängigkeiten (extern): keine
@@ -7,22 +7,7 @@
 ingestion/auto_dividend_update.py
 
 Einstiegspunkt für den automatischen Dividenden-Abruf (systemd).
-
-Ablauf:
-  1. Alle ISINs die seit >6h nicht aktualisiert wurden in Batches à 100
-  2. Pause zwischen Batches
-  3. Schwellwert-Überschreitungen aus DB lesen
-  4. Zusammenfassung via E-Mail senden
-  5. Ergebnis in metadata speichern (GUI liest beim nächsten Start)
-  6. NEU: Datenqualitäts-Check durchführen + Bericht speichern
-
-Neu 2026-05-15:
-  run_quality_check() + save_report() am Ende jedes Laufs.
-  Fehler dürfen Daemon nicht beenden (try/except wie E-Mail).
-
-Kapazitätsplanung:
-  _TOTAL_PER_RUN = 3500 → ~117 Min pro Lauf bei ~2s/ISIN
-  2 Läufe/Tag × 3500 = 7000 ISINs → deckt gesamtes fälliges Universum ab
+Fix 2026-05-16: noqa E402 für sys.path-Manipulation (bewusst, kein Fehler).
 """
 
 from __future__ import annotations
@@ -37,10 +22,10 @@ _PROJECT = Path(__file__).parent.parent
 if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
-from core.dividend_service import update_batch_due
-from core.email_service    import send_batch_summary
-from core.data_quality     import run_quality_check, save_report
-from db.dividend_repository import (
+from core.dividend_service import update_batch_due  # noqa: E402
+from core.email_service    import send_batch_summary  # noqa: E402
+from core.data_quality     import run_quality_check, save_report  # noqa: E402
+from db.dividend_repository import (  # noqa: E402
     DB_PATH,
     get_unshown_threshold_crossings,
 )
@@ -68,7 +53,6 @@ def _setup_logging() -> None:
 
 
 def _save_run_summary(stats: dict, crossings: list[dict]) -> None:
-    """Speichert Lauf-Zusammenfassung in metadata für GUI-Anzeige."""
     import sqlite3
     summary = {
         "run_at":    datetime.now().isoformat(),
@@ -103,10 +87,7 @@ def main() -> int:
 
     while processed < _TOTAL_PER_RUN:
         remaining = min(_BATCH_SIZE, _TOTAL_PER_RUN - processed)
-        stats = update_batch_due(
-            limit=remaining,
-            batch_pause=2.0,
-        )
+        stats = update_batch_due(limit=remaining, batch_pause=2.0)
 
         for key in total_stats:
             total_stats[key] += stats.get(key, 0)
@@ -122,40 +103,28 @@ def main() -> int:
 
     logger.info(
         "Gesamt: %d verarbeitet, %d aktualisiert, %d übersprungen.",
-        total_stats["processed"],
-        total_stats["updated"],
-        total_stats["skipped"],
+        total_stats["processed"], total_stats["updated"], total_stats["skipped"],
     )
 
-    # ── Schwellwert-Überschreitungen ──────────────────────────────────────────
     crossings = get_unshown_threshold_crossings()
     logger.info("%d neue Schwellwert-Überschreitungen.", len(crossings))
 
-    # ── E-Mail — Fehler darf Daemon nicht beenden ─────────────────────────────
     try:
-        send_batch_summary(
-            stats=total_stats,
-            crossings=crossings,
-            run_label=run_label,
-        )
+        send_batch_summary(stats=total_stats, crossings=crossings, run_label=run_label)
     except Exception as exc:
         logger.error("E-Mail-Versand fehlgeschlagen: %s", exc)
 
-    # ── Lauf-Summary speichern — Fehler darf Daemon nicht beenden ────────────
     try:
         _save_run_summary(total_stats, crossings)
     except Exception as exc:
         logger.error("Run-Summary konnte nicht gespeichert werden: %s", exc)
 
-    # ── Datenqualitäts-Check — Fehler darf Daemon nicht beenden ──────────────
     try:
         report = run_quality_check(db_path=DB_PATH)
         save_report(report, db_path=DB_PATH)
         logger.info(
             "Qualitätsbericht: Abdeckung %.1f %%, Ausreißer %d, Warnungen %d.",
-            report.coverage_pct,
-            report.outliers_above_cap,
-            len(report.warnings),
+            report.coverage_pct, report.outliers_above_cap, len(report.warnings),
         )
     except Exception as exc:
         logger.error("Datenqualitäts-Check fehlgeschlagen: %s", exc)
