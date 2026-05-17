@@ -17,14 +17,12 @@ Abgedeckte Pfade:
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.dividend_service import (
-    _CASCADE_SOURCES,
     _MAX_PLAUSIBLE_YIELD_BPS,
     _check_threshold_crossing,
     _is_plausible,
