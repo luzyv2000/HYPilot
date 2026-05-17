@@ -56,15 +56,11 @@ if str(_PROJECT) not in sys.path:
 
 load_dotenv(dotenv_path=_PROJECT / ".env")
 
-from core.ticker_resolver import (
-    _apply_suffix,
-    _get_preferred_exchanges,
+from core.ticker_resolver import (  # noqa: E402
     _select_best_figi,
     _store_mapping,
-    _store_unresolvable,
     _validate_ticker_with_retry,
     _ISIN_PREFIXES_REQUIRE_YF_VALIDATION,
-    UNRESOLVABLE_TTL_DAYS,
     DB_PATH,
 )
 

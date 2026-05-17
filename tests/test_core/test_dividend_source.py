@@ -9,7 +9,6 @@ Diese Tests sind rein deterministisch — kein Netzwerk, keine DB.
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal
 
 import pytest
