@@ -1,11 +1,21 @@
 # Dateiname:     gui/tabs/universe_tab.py
-# Version:       2026-05-09-watchlist
+# Version:       2026-05-17-sparplan
 # Abhängigkeiten (intern): gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
 #                          db.watchlist_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/universe_tab.py — Neu: Watchlist-Button in der Toolbar.
+gui/tabs/universe_tab.py
+
+Neu 2026-05-17:
+  - _QUERY liest sparplan-Feld aus instruments
+  - _load_instruments() setzt flag = 'S' für Sparplan-markierte ISINs
+  - reload_data() — öffentliche Methode für app.py (nach Sparplan-Popup)
+
+Zukünftige flag-Erweiterungen (vorbereitet):
+  S  = Sparplan
+  ☆  = Dividendenaristokrat
+  ★  = Dividendenkönig
 """
 
 from __future__ import annotations
@@ -39,7 +49,8 @@ _QUERY = """
         d.currency,
         d.payout_ratio_bps,
         d.data_source,
-        CASE WHEN i.name_override IS NOT NULL THEN 1 ELSE 0 END AS has_override
+        CASE WHEN i.name_override IS NOT NULL THEN 1 ELSE 0 END AS has_override,
+        i.sparplan
     FROM instruments i
     LEFT JOIN dividend_data d ON i.isin = d.isin
     ORDER BY display_name ASC
@@ -60,6 +71,17 @@ def _format_isin_wkn(isin: str, wkn: str) -> str:
 
 def _format_score(score_total: int, rating: str) -> str:
     return f"{score_total} {_RATING_SHORT.get(rating, rating[:1])}"
+
+
+def _format_flag(sparplan: str | None) -> str:
+    """
+    Erstellt den flag-Anzeige-String.
+    Aktuell: 'S' für Sparplan.
+    Vorbereitet für: '☆' (Aristokrat), '★' (König).
+    """
+    if sparplan == "S":
+        return "S"
+    return ""
 
 
 def _load_instruments() -> list[Row]:
@@ -102,7 +124,7 @@ def _load_instruments() -> list[Row]:
                         logger.debug("Score fehlgeschlagen für %s.", db_row["isin"])
 
                 rows.append((
-                    "",
+                    _format_flag(db_row["sparplan"]),   # flag-Spalte
                     name,
                     _format_isin_wkn(db_row["isin"], db_row["wkn"]),
                     _format_div(db_row["yield_bps"]),
@@ -131,7 +153,7 @@ class UniverseTab(ctk.CTkFrame):
         self._batch_running  = False
         self._stop_event     = threading.Event()
         self._progress_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
-        self._watchlist_tab  = None  # wird via set_watchlist_tab() gesetzt
+        self._watchlist_tab  = None
 
         self._build_toolbar()
         self._build_progress_bar()
@@ -145,6 +167,13 @@ class UniverseTab(ctk.CTkFrame):
     def set_watchlist_tab(self, tab: Any) -> None:
         """Referenz auf WatchlistTab für Reload nach Änderung."""
         self._watchlist_tab = tab
+
+    def reload_data(self) -> None:
+        """
+        Öffentliche Methode — wird von app.py nach Sparplan-Popup aufgerufen.
+        Lädt Tabellendaten neu damit S-Markierungen sofort sichtbar sind.
+        """
+        self._table.load_data(_load_instruments)
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -184,7 +213,6 @@ class UniverseTab(ctk.CTkFrame):
             bar, width=2, height=24, fg_color=("gray70", "gray40")
         ).pack(side="left", padx=12)
 
-        # ── Watchlist-Button ──────────────────────────────────────────────────
         self._watchlist_btn = ctk.CTkButton(
             bar,
             text="⭐  Watchlist",
@@ -258,7 +286,7 @@ class UniverseTab(ctk.CTkFrame):
         self._detail_panel.grid(row=4, column=0, sticky="ew", padx=0, pady=0)
         self._detail_panel.grid_propagate(False)
 
-    # ── Selektion → Detail-Panel + Watchlist-Button ───────────────────────────
+    # ── Selektion ─────────────────────────────────────────────────────────────
 
     def _on_instrument_selected(self, isin: str) -> None:
         self._detail_panel.update(isin)
