@@ -1,0 +1,351 @@
+/home/luzy/workspace/openclaw-min
+├── agent
+│   ├── core.py
+│   └── __init__.py
+├── analysis
+│   ├── engine.py
+│   ├── filter.py
+│   ├── __init__.py
+│   ├── rules.py
+│   └── scorer.py
+├── .benchmarks
+├── config.py
+├── core
+│   ├── data_quality.py
+│   ├── data_requirements.py
+│   ├── dividend_service.py
+│   ├── dividend_source.py
+│   ├── email_service.py
+│   ├── __init__.py
+│   ├── sources
+│   │   ├── boerse_frankfurt_source.py
+│   │   ├── divvydiary_source.py
+│   │   ├── __init__.py
+│   │   └── yfinance_source.py
+│   ├── ticker_resolver.py
+│   └── universe_service.py
+├── data
+│   ├── instrument_universe.hash
+│   ├── instrument_universe.pdf
+│   └── raw_pdfs
+│       ├── 2026-04-21_Instrument_Universe_DE_de.pdf
+│       ├── Instrument_Universe_DE_de.hash
+│       └── Instrument_Universe_DE_de.pdf
+├── db
+│   ├── dividend_repository.py
+│   ├── hypilot.db
+│   ├── init_db.py
+│   ├── __init__.py
+│   ├── instrument_repository.py
+│   ├── portfolio_repository.py
+│   └── watchlist_repository.py
+├── docs
+│   ├── 00 Vorlagen.txt
+│   ├── 05 HYPilot Projektanalyse und Übernahmeplanung.md
+│   ├── 06 HYPilot Projektanalyse und Fortsetzungsplanung.md
+│   ├── 07 HYPilot Projektanalyse und Fortsetzung.md
+│   ├── 08 HYPilot Projektanalyse und Testfortschritt.md
+│   ├── 09 HYPilot Projektanalyse und Testfortschritt fortsetzen.md
+│   ├── 10 HYPilot Projektanalyse und Fortsetzung.md
+│   ├── 2025 12 03 HYPilot - Feature- & Optimierungsliste.md
+│   ├── 2026 04 23 HYPilot - Auffälligkeiten.md
+│   ├── 2026 04 24 - Fehleranalyse 01.md
+│   ├── 2026 04 27 Fahrplan zur Weiterentwicklung.md
+│   ├── Exkurs_01.md
+│   ├── Exkurs_02.md
+│   ├── Exkurs_03.md
+│   ├── Exkurs_05.md
+│   ├── Exkurs_06.md
+│   ├── Exkurs_08.md
+│   ├── handoff-iELcyt.md
+│   └── README Entwurf.txt
+├── .env
+├── .github
+│   └── workflows
+│       ├── tests.yml
+│       └── weekly_review.yml
+├── .gitignore
+├── gui
+│   ├── app.py
+│   ├── __init__.py
+│   ├── tabs
+│   │   ├── analyse_tab.py
+│   │   ├── high_yield_tab.py
+│   │   ├── info_tab.py
+│   │   ├── __init__.py
+│   │   ├── portfolio_tab.py
+│   │   ├── universe_tab.py
+│   │   └── watchlist_tab.py
+│   └── widgets
+│       ├── __init__.py
+│       ├── instrument_table.py
+│       ├── name_edit_dialog.py
+│       ├── pending_names_dialog.py
+│       ├── score_detail_panel.py
+│       └── threshold_crossing_popup.py
+├── hypilot.py
+├── .hypothesis
+│   ├── constants
+│   │   ├── 13316e82886a62df
+│   │   ├── 1572388b502b9cf1
+│   │   ├── 1bb6e81f5f9cbead
+│   │   ├── 25c5ef92621988b4
+│   │   ├── 2aa2c53781689182
+│   │   ├── 3670ff062c1be2ac
+│   │   ├── 38273a25cf5f0fc9
+│   │   ├── 50d511e2db5061fd
+│   │   ├── 5c241617db35bbd7
+│   │   ├── 67b0a8ccf18bf5d2
+│   │   ├── 695216dcb24a233b
+│   │   ├── 6cfbd94685de63dc
+│   │   ├── 7b2fe05ae7c345d9
+│   │   ├── 7e78702f2dd5b98d
+│   │   ├── 86e7a5122c368d90
+│   │   ├── 87fd068080cfac54
+│   │   ├── 88f883958ad0fc73
+│   │   ├── 910c9d843c1139a6
+│   │   ├── 96a719065d0c4ea3
+│   │   ├── 972afb7c63fcb277
+│   │   ├── 991da37e942ac327
+│   │   ├── a2fa8972870819c5
+│   │   ├── a63d8afaeae87443
+│   │   ├── a689ed8fbe180dc5
+│   │   ├── a8b227f909d85f3d
+│   │   ├── adc83b19e793491b
+│   │   ├── b4a83ad56c3ebbf0
+│   │   ├── b994726e5700125c
+│   │   ├── ba3de3109d3a57d8
+│   │   ├── bb295e69087cf520
+│   │   ├── bf85503117be3975
+│   │   ├── c0decbc4a2b9fddd
+│   │   ├── c22cbdfdf6cb2cba
+│   │   ├── c97b859c5ba4de86
+│   │   ├── d02e8904d7f86012
+│   │   ├── d23d20a025b3a656
+│   │   ├── d86cf997d21efdc1
+│   │   ├── da39a3ee5e6b4b0d
+│   │   ├── de7fd8128e07344a
+│   │   ├── e0aa9bc9e9eabf48
+│   │   └── fe73629d74c2f00e
+│   └── .gitignore
+├── ingestion
+│   ├── auto_dividend_update.py
+│   ├── bulk_ticker_import.py
+│   ├── downloader.py
+│   ├── __init__.py
+│   ├── parser.py
+│   ├── run_update.py
+│   └── updater.py
+├── logs
+│   ├── auto_dividend_20260502.log
+│   ├── auto_dividend_20260503.log
+│   ├── auto_dividend.log
+│   ├── bulk_import_20260502.log
+│   ├── bulk_ticker_import.log
+│   └── update.log
+├── main.py
+├── migration_add_unresolvable.sql
+├── projektstruktur.txt
+├── .pytest_cache
+│   ├── CACHEDIR.TAG
+│   ├── .gitignore
+│   ├── README.md
+│   └── v
+│       └── cache
+│           ├── lastfailed
+│           └── nodeids
+├── pytest.ini
+├── requirements.txt
+├── .ruff_cache
+│   ├── 0.15.6
+│   │   ├── 6587780401445095975
+│   │   └── 7328484263702076659
+│   ├── CACHEDIR.TAG
+│   └── .gitignore
+├── systemd
+│   ├── hypilot-dividends.service
+│   └── hypilot-dividends.timer
+├── tests
+│   ├── conftest.py
+│   ├── __init__.py
+│   ├── test_analysis
+│   │   ├── __init__.py
+│   │   ├── test_engine.py
+│   │   ├── test_rules.py
+│   │   ├── test_scorer_growth.py
+│   │   └── test_scorer.py
+│   ├── test_core
+│   │   ├── __init__.py
+│   │   ├── test_boerse_frankfurt_source.py
+│   │   ├── test_conversions_hypothesis.py
+│   │   ├── test_data_quality.py
+│   │   ├── test_dividend_service.py
+│   │   ├── test_dividend_source.py
+│   │   ├── test_divvydiary_source.py
+│   │   ├── test_email_service.py
+│   │   ├── test_ticker_resolver.py
+│   │   └── test_universe_service.py
+│   ├── test_db
+│   │   ├── __init__.py
+│   │   ├── test_dividend_repository.py
+│   │   ├── test_portfolio_repository.py
+│   │   └── test_watchlist_repository.py
+│   └── test_ingestion
+│       ├── __init__.py
+│       └── test_auto_dividend_update.py
+├── tools
+│   ├── basic.py
+│   ├── finance.py
+│   └── __init__.py
+└── venv
+    ├── bin
+    │   ├── activate
+    │   ├── activate.csh
+    │   ├── activate.fish
+    │   ├── Activate.ps1
+    │   ├── cpuinfo
+    │   ├── curl-cffi
+    │   ├── dotenv
+    │   ├── dumppdf.py
+    │   ├── f2py
+    │   ├── hypothesis
+    │   ├── markdown-it
+    │   ├── normalizer
+    │   ├── numpy-config
+    │   ├── pdf2txt.py
+    │   ├── pdfplumber
+    │   ├── pip
+    │   ├── pip3
+    │   ├── pip3.12
+    │   ├── pwiz
+    │   ├── pygmentize
+    │   ├── pypdfium2
+    │   ├── py.test
+    │   ├── pytest
+    │   ├── py.test-benchmark
+    │   ├── pytest-benchmark
+    │   ├── python -> /usr/bin/python
+    │   ├── python3 -> python
+    │   ├── python3.12 -> python
+    │   ├── sample
+    │   └── websockets
+    ├── include
+    │   └── python3.12
+    ├── lib
+    │   └── python3.12
+    │       └── site-packages
+    │           ├── 81d243bd2c585b0f4821__mypyc.cpython-312-x86_64-linux-gnu.so
+    │           ├── beautifulsoup4-4.14.3.dist-info
+    │           ├── bs4
+    │           ├── certifi
+    │           ├── certifi-2026.2.25.dist-info
+    │           ├── cffi
+    │           ├── cffi-2.0.0.dist-info
+    │           ├── _cffi_backend.cpython-312-x86_64-linux-gnu.so
+    │           ├── charset_normalizer
+    │           ├── charset_normalizer-3.4.7.dist-info
+    │           ├── cpuinfo
+    │           ├── cryptography
+    │           ├── cryptography-46.0.7.dist-info
+    │           ├── curl_cffi
+    │           ├── curl_cffi-0.15.0.dist-info
+    │           ├── customtkinter
+    │           ├── customtkinter-5.2.2.dist-info
+    │           ├── darkdetect
+    │           ├── darkdetect-0.8.0.dist-info
+    │           ├── dateutil
+    │           ├── dotenv
+    │           ├── execnet
+    │           ├── execnet-2.1.2.dist-info
+    │           ├── frozendict
+    │           ├── frozendict-2.4.7.dist-info
+    │           ├── google
+    │           ├── hypothesis
+    │           ├── hypothesis-6.152.1.dist-info
+    │           ├── _hypothesis_ftz_detector.py
+    │           ├── _hypothesis_globals.py
+    │           ├── _hypothesis_pytestplugin.py
+    │           ├── idna
+    │           ├── idna-3.11.dist-info
+    │           ├── iniconfig
+    │           ├── iniconfig-2.3.0.dist-info
+    │           ├── markdown_it
+    │           ├── markdown_it_py-4.0.0.dist-info
+    │           ├── mdurl
+    │           ├── mdurl-0.1.2.dist-info
+    │           ├── multitasking
+    │           ├── multitasking-0.0.12.dist-info
+    │           ├── numpy
+    │           ├── numpy-2.4.4.dist-info
+    │           ├── numpy.libs
+    │           ├── packaging
+    │           ├── packaging-26.1.dist-info
+    │           ├── pandas
+    │           ├── pandas-3.0.2.dist-info
+    │           ├── pdfminer
+    │           ├── pdfminer_six-20251230.dist-info
+    │           ├── pdfplumber
+    │           ├── pdfplumber-0.11.9.dist-info
+    │           ├── peewee-4.0.4.dist-info
+    │           ├── peewee.py
+    │           ├── PIL
+    │           ├── pillow-12.2.0.dist-info
+    │           ├── pillow.libs
+    │           ├── pip
+    │           ├── pip-24.0.dist-info
+    │           ├── platformdirs
+    │           ├── platformdirs-4.9.6.dist-info
+    │           ├── playhouse
+    │           ├── pluggy
+    │           ├── pluggy-1.6.0.dist-info
+    │           ├── protobuf-7.34.1.dist-info
+    │           ├── pwiz.py
+    │           ├── pycparser
+    │           ├── pycparser-3.0.dist-info
+    │           ├── py_cpuinfo-9.0.0.dist-info
+    │           ├── pygments
+    │           ├── pygments-2.20.0.dist-info
+    │           ├── pypdfium2
+    │           ├── pypdfium2-5.7.0.dist-info
+    │           ├── pypdfium2_cfg
+    │           ├── pypdfium2_cli
+    │           ├── pypdfium2_raw
+    │           ├── py.py
+    │           ├── _pytest
+    │           ├── pytest
+    │           ├── pytest-9.0.3.dist-info
+    │           ├── pytest_benchmark
+    │           ├── pytest_benchmark-5.2.3.dist-info
+    │           ├── pytest_xdist-3.8.0.dist-info
+    │           ├── python_dateutil-2.9.0.post0.dist-info
+    │           ├── python_dotenv-1.2.2.dist-info
+    │           ├── pytz
+    │           ├── pytz-2026.1.post1.dist-info
+    │           ├── pyyaml-6.0.3.dist-info
+    │           ├── requests
+    │           ├── requests-2.33.1.dist-info
+    │           ├── responses
+    │           ├── responses-0.26.0.dist-info
+    │           ├── rich
+    │           ├── rich-15.0.0.dist-info
+    │           ├── six-1.17.0.dist-info
+    │           ├── six.py
+    │           ├── sortedcontainers
+    │           ├── sortedcontainers-2.4.0.dist-info
+    │           ├── soupsieve
+    │           ├── soupsieve-2.8.3.dist-info
+    │           ├── typing_extensions-4.15.0.dist-info
+    │           ├── typing_extensions.py
+    │           ├── urllib3
+    │           ├── urllib3-2.6.3.dist-info
+    │           ├── websockets
+    │           ├── websockets-16.0.dist-info
+    │           ├── xdist
+    │           ├── _yaml
+    │           ├── yaml
+    │           ├── yfinance
+    │           └── yfinance-1.2.2.dist-info
+    ├── lib64 -> lib
+    └── pyvenv.cfg
+
+140 directories, 209 files
