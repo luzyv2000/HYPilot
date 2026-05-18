@@ -21,7 +21,10 @@ source venv/bin/activate
 
 ======= Markdown ======= 
 
-(venv) luzy@luzy-NucBox-K8-Plus:~/Dokumente$ pandoc xy.odt -t markdown -o xy.md
+cd ~/Dokumente
+pandoc xy.odt -t markdown -o xy.md
+cd /home/luzy/workspace/openclaw-min
+source venv/bin/activate
 
 ======= Commit ======= 
 
