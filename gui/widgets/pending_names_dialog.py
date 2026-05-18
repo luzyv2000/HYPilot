@@ -1,21 +1,16 @@
 # Dateiname:     gui/widgets/pending_names_dialog.py
-# Version:       2026-04-22-A
+# Version:       2026-04-22-A-fix1
 # Abhängigkeiten (intern): db.instrument_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/widgets/pending_names_dialog.py
-
-Modaler Dialog für ausstehende Namensänderungen aus PDF-Importen.
-
-Zeigt alle Konflikte in einer Tabelle.
-Pro Zeile: Aktuellen vs. neuen Namen + Entscheiden-Buttons.
-Alle genehmigen / Alle ablehnen als Bulk-Aktion.
+gui/widgets/pending_names_dialog.py  —  Modaler Dialog für Namensänderungen.
+Fix 2026-05-16: noqa F401 für tkinter as tk (wird für tk.TclError benötigt).
 """
 
 from __future__ import annotations
 
 import logging
-import tkinter as tk
+import tkinter as tk  # noqa: F401  (tk.TclError in style.theme_use)
 from tkinter import ttk
 from typing import Callable
 
@@ -38,7 +33,6 @@ class PendingNamesDialog(ctk.CTkToplevel):
     Args:
         master:    Eltern-Widget
         on_closed: Callback wenn Dialog geschlossen wird
-                   (damit Toolbar-Badge aktualisiert werden kann)
     """
 
     def __init__(
@@ -65,17 +59,11 @@ class PendingNamesDialog(ctk.CTkToplevel):
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # Info-Label
-        self._info_label = ctk.CTkLabel(
-            self,
-            text="",
-            anchor="w",
-        )
+        self._info_label = ctk.CTkLabel(self, text="", anchor="w")
         self._info_label.grid(
             row=0, column=0, padx=16, pady=(14, 6), sticky="w"
         )
 
-        # Treeview
         outer = ctk.CTkFrame(self, fg_color="transparent")
         outer.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
         outer.grid_rowconfigure(0, weight=1)
@@ -101,7 +89,6 @@ class PendingNamesDialog(ctk.CTkToplevel):
         self._tree.grid(row=0, column=0, sticky="nsew")
         vsb.grid(row=0, column=1, sticky="ns")
 
-        # Button-Leiste
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=2, column=0, padx=12, pady=(0, 14), sticky="ew")
         btn_frame.grid_columnconfigure(2, weight=1)

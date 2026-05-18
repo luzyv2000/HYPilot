@@ -1,34 +1,20 @@
 # Dateiname:     gui/tabs/watchlist_tab.py
-# Version:       2026-05-12
+# Version:       2026-05-12-fix1
 # Abhängigkeiten (intern): db.watchlist_repository,
-#                          gui.widgets.instrument_table,
 #                          gui.widgets.score_detail_panel,
 #                          analysis.scorer, db.dividend_repository
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/watchlist_tab.py
-
-Watchlist-Tab — persönlich markierte Instrumente.
-
-Funktionen:
-  - Anzeige aller Watchlist-Einträge mit Score + Rendite
-  - Entfernen via Toolbar-Button (selektiertes Instrument)
-  - Notizfeld: Freitext pro ISIN (Inline-Bearbeitung)
-  - Score-Detail-Panel bei Selektion
-  - Instrument-Anzahl in der Toolbar
-
-Fix 2026-05-12:
-  - notes or "" in _populate — verhindert TypeError wenn notes NULL
-  - Watchlist-Button-Text vereinheitlicht (⭐ konsistent mit HighYieldTab)
+gui/tabs/watchlist_tab.py  —  Watchlist-Tab.
+Fix 2026-05-16: Ungenutzte Imports entfernt
+  (sqlite3, date, WatchlistEntry, DividendSnapshot).
 """
 
 from __future__ import annotations
 
 import logging
 import queue
-import sqlite3
 import threading
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +27,6 @@ from db.watchlist_repository import (
     get_watchlist,
     remove_from_watchlist,
     update_notes,
-    WatchlistEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +47,6 @@ def _load_watchlist_rows() -> list[tuple]:
     zurück. Läuft im Hintergrund-Thread.
     """
     from analysis.scorer import score_dividend_snapshot
-    from core.dividend_source import DividendSnapshot
     from db.dividend_repository import get_growth_metrics_bulk, get_snapshot
 
     entries    = get_watchlist()
@@ -77,10 +61,8 @@ def _load_watchlist_rows() -> list[tuple]:
         try:
             snapshot = get_snapshot(entry.isin, db_path=DB_PATH)
             if snapshot is not None:
-                metrics   = growth_map.get(entry.isin)
-                score     = score_dividend_snapshot(
-                    snapshot, growth_metrics=metrics
-                )
+                metrics      = growth_map.get(entry.isin)
+                score        = score_dividend_snapshot(snapshot, growth_metrics=metrics)
                 yield_str    = _format_div(snapshot.yield_bps)
                 short        = _RATING_SHORT.get(score.rating, "?")
                 score_str    = f"{score.total} {short}"
@@ -97,7 +79,7 @@ def _load_watchlist_rows() -> list[tuple]:
             yield_str,
             score_str,
             score_rating,
-            entry.notes,     # kann None sein → in _populate abgesichert
+            entry.notes,
             added_display,
         ))
 
@@ -227,7 +209,6 @@ class WatchlistTab(ctk.CTkFrame):
         self._tree.bind("<Double-1>",          self._on_double_click)
 
     def _build_notes_bar(self) -> None:
-        """Inline-Notizbearbeitung unterhalb der Tabelle."""
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=3, column=0, sticky="ew", padx=8, pady=(6, 0))
         bar.grid_columnconfigure(1, weight=1)
@@ -294,9 +275,7 @@ class WatchlistTab(ctk.CTkFrame):
         for row in rows:
             isin, name, wkn, yield_str, score_str, rating, notes, added = row
 
-            # Fix: notes kann NULL aus DB sein
             notes    = notes or ""
-
             isin_wkn = f"{isin}\n{wkn}" if wkn else isin
             tags     = (rating,) if rating else ()
 
@@ -336,7 +315,6 @@ class WatchlistTab(ctk.CTkFrame):
         self._remove_btn.configure(state="normal")
         self._detail_panel.update(isin)
 
-        # Notizfeld befüllen
         row = next((r for r in self._rows if r[0] == isin), None)
         if row:
             notes = row[6] or ""
@@ -346,7 +324,6 @@ class WatchlistTab(ctk.CTkFrame):
             self._notes_save_btn.configure(state="normal")
 
     def _on_double_click(self, event: tk.Event) -> None:
-        """Doppelklick fokussiert das Notizfeld."""
         if self._get_selected_isin():
             self._notes_entry.focus_set()
 

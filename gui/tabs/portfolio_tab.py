@@ -1,37 +1,18 @@
 # Dateiname:     gui/tabs/portfolio_tab.py
-# Version:       2026-05-15
+# Version:       2026-05-15-fix1
 # Abhängigkeiten (intern): db.portfolio_repository,
 #                          gui.widgets.score_detail_panel,
 #                          db.dividend_repository, analysis.scorer
 # Abhängigkeiten (extern): customtkinter
 """
-gui/tabs/portfolio_tab.py
-
-Portfolio-Tab — persönlich gehaltene Positionen.
-
-Funktionen:
-  - Positionsliste mit Stückzahl, Kaufkurs, aktueller Rendite, Score
-  - Position hinzufügen via ISIN-Eingabefeld + Dialog
-  - Position bearbeiten (Doppelklick → Inline-Dialog)
-  - Position entfernen
-  - Geschätzter jährlicher Dividendenertrag pro Position + Gesamt
-  - Score-Detail-Panel bei Selektion
-
-Berechnungen (alle via Decimal, kein float):
-  shares     = shares_micro  / 1_000_000
-  buy_price  = buy_price_micro / 1_000_000
-  invest_val = shares × buy_price
-  est_annual = invest_val × yield_percent
-
-Threading:
-  Datenladen im Hintergrundthread, GUI-Updates via queue.Queue + after().
+gui/tabs/portfolio_tab.py  —  Portfolio-Tab.
+Fix 2026-05-16: Ungenutzte Imports sqlite3 + PortfolioEntry entfernt.
 """
 
 from __future__ import annotations
 
 import logging
 import queue
-import sqlite3
 import threading
 from decimal import Decimal
 from pathlib import Path
@@ -43,7 +24,6 @@ from tkinter import ttk
 
 from gui.widgets.score_detail_panel import ScoreDetailPanel
 from db.portfolio_repository import (
-    PortfolioEntry,
     add_position,
     get_portfolio,
     remove_position,
@@ -75,8 +55,7 @@ def _fmt_shares(micro: int) -> str:
 def _fmt_price(micro: int | None, currency: str) -> str:
     if micro is None:
         return "—"
-    d = _micro_to_dec(micro)
-    return f"{d:,.2f} {currency}"
+    return f"{_micro_to_dec(micro):,.2f} {currency}"
 
 
 def _fmt_yield(yield_bps: int | None) -> str:
@@ -87,7 +66,6 @@ def _fmt_yield(yield_bps: int | None) -> str:
 
 def _fmt_annual(shares_micro: int, buy_price_micro: int | None,
                 yield_bps: int | None, currency: str) -> str:
-    """Schätzt jährlichen Dividendenertrag: shares × kaufkurs × rendite."""
     if buy_price_micro is None or yield_bps is None:
         return "—"
     shares    = _micro_to_dec(shares_micro)
@@ -97,15 +75,9 @@ def _fmt_annual(shares_micro: int, buy_price_micro: int | None,
     return f"{annual:,.2f} {currency}"
 
 
-# ── Lade-Funktion (läuft im Hintergrundthread) ────────────────────────────────
+# ── Lade-Funktion ─────────────────────────────────────────────────────────────
 
 def _load_portfolio_rows() -> list[tuple]:
-    """
-    Gibt Liste von Tupeln zurück:
-    (isin, name, wkn, shares_str, price_str, yield_str,
-     score_str, rating, annual_str, added_str,
-     shares_micro, buy_price_micro, currency, notes)
-    """
     from analysis.scorer import score_dividend_snapshot
     from db.dividend_repository import get_growth_metrics_bulk, get_snapshot
 
@@ -114,10 +86,10 @@ def _load_portfolio_rows() -> list[tuple]:
 
     rows = []
     for entry in entries:
-        yield_bps    = None
-        score_str    = "—"
-        rating       = ""
-        annual_str   = "—"
+        yield_bps  = None
+        score_str  = "—"
+        rating     = ""
+        annual_str = "—"
 
         try:
             snapshot = get_snapshot(entry.isin, db_path=DB_PATH)
@@ -129,10 +101,8 @@ def _load_portfolio_rows() -> list[tuple]:
                 score_str = f"{score.total} {short}"
                 rating    = score.rating
                 annual_str = _fmt_annual(
-                    entry.shares_micro,
-                    entry.buy_price_micro,
-                    yield_bps,
-                    entry.currency,
+                    entry.shares_micro, entry.buy_price_micro,
+                    yield_bps, entry.currency,
                 )
         except Exception:
             logger.debug("Scoring fehlgeschlagen für %s.", entry.isin)
@@ -148,38 +118,25 @@ def _load_portfolio_rows() -> list[tuple]:
             rating,
             annual_str,
             entry.added_at[:10] if entry.added_at else "—",
-            # Raw-Werte für Dialog
             entry.shares_micro,
             entry.buy_price_micro,
             entry.currency,
             entry.notes,
         ))
-
     return rows
 
 
 # ── Positions-Dialog ──────────────────────────────────────────────────────────
 
 class _PositionDialog(ctk.CTkToplevel):
-    """
-    Modaler Dialog zum Hinzufügen oder Bearbeiten einer Position.
-
-    Args:
-        master:     Eltern-Widget
-        isin:       ISIN (readonly beim Bearbeiten, editierbar beim Hinzufügen)
-        edit_mode:  True = Bearbeiten, False = Neu
-        initial:    Vorausgefüllte Werte (shares_micro, buy_price_micro,
-                    currency, notes) beim Bearbeiten
-        on_saved:   Callback nach erfolgreichem Speichern
-    """
 
     def __init__(
         self,
         master: Any,
-        isin:    str        = "",
-        edit_mode: bool     = False,
-        initial:   dict     | None = None,
-        on_saved:  Any      = None,
+        isin:      str        = "",
+        edit_mode: bool       = False,
+        initial:   dict | None = None,
+        on_saved:  Any        = None,
     ) -> None:
         super().__init__(master)
         self._isin      = isin
@@ -187,8 +144,7 @@ class _PositionDialog(ctk.CTkToplevel):
         self._initial   = initial or {}
         self._on_saved  = on_saved
 
-        title = "Position bearbeiten" if edit_mode else "Position hinzufügen"
-        self.title(title)
+        self.title("Position bearbeiten" if edit_mode else "Position hinzufügen")
         self.geometry("480x340")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -199,7 +155,6 @@ class _PositionDialog(ctk.CTkToplevel):
     def _build(self) -> None:
         self.grid_columnconfigure(1, weight=1)
 
-        # ISIN
         ctk.CTkLabel(self, text="ISIN:", anchor="w").grid(
             row=0, column=0, padx=(20, 8), pady=(20, 6), sticky="w"
         )
@@ -216,7 +171,6 @@ class _PositionDialog(ctk.CTkToplevel):
             if self._isin:
                 self._isin_entry.insert(0, self._isin)
 
-        # Stückzahl
         ctk.CTkLabel(self, text="Stückzahl:", anchor="w").grid(
             row=1, column=0, padx=(20, 8), pady=(0, 6), sticky="w"
         )
@@ -231,7 +185,6 @@ class _PositionDialog(ctk.CTkToplevel):
                 0, str(_micro_to_dec(self._initial["shares_micro"]))
             )
 
-        # Kaufkurs
         ctk.CTkLabel(self, text="Kaufkurs:", anchor="w").grid(
             row=2, column=0, padx=(20, 8), pady=(0, 6), sticky="w"
         )
@@ -246,7 +199,6 @@ class _PositionDialog(ctk.CTkToplevel):
                 0, str(_micro_to_dec(self._initial["buy_price_micro"]))
             )
 
-        # Währung
         ctk.CTkLabel(self, text="Währung:", anchor="w").grid(
             row=3, column=0, padx=(20, 8), pady=(0, 6), sticky="w"
         )
@@ -260,7 +212,6 @@ class _PositionDialog(ctk.CTkToplevel):
             width=100,
         ).grid(row=3, column=1, padx=(0, 20), pady=(0, 6), sticky="w")
 
-        # Notiz
         ctk.CTkLabel(self, text="Notiz:", anchor="w").grid(
             row=4, column=0, padx=(20, 8), pady=(0, 6), sticky="w"
         )
@@ -273,7 +224,6 @@ class _PositionDialog(ctk.CTkToplevel):
         if self._initial.get("notes"):
             self._notes_entry.insert(0, self._initial["notes"])
 
-        # Fehlermeldung
         self._error_label = ctk.CTkLabel(
             self, text="",
             text_color=("firebrick3", "#ef5350"),
@@ -283,7 +233,6 @@ class _PositionDialog(ctk.CTkToplevel):
             row=5, column=0, columnspan=2, padx=20, pady=(0, 4), sticky="w"
         )
 
-        # Buttons
         btn = ctk.CTkFrame(self, fg_color="transparent")
         btn.grid(row=6, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
         btn.grid_columnconfigure(0, weight=1)
@@ -303,7 +252,6 @@ class _PositionDialog(ctk.CTkToplevel):
         self.bind("<Escape>", lambda _: self.destroy())
 
     def _save(self) -> None:
-        # ISIN
         if self._edit_mode:
             isin = self._isin
         else:
@@ -312,14 +260,12 @@ class _PositionDialog(ctk.CTkToplevel):
                 self._error_label.configure(text="ISIN muss 12 Zeichen haben.")
                 return
 
-        # Stückzahl parsen
         shares_str = self._shares_entry.get().replace(",", ".").strip()
         if not shares_str:
             self._error_label.configure(text="Stückzahl ist erforderlich.")
             return
         try:
-            shares_dec   = Decimal(shares_str)
-            shares_micro = int(shares_dec * Decimal("1000000"))
+            shares_micro = int(Decimal(shares_str) * Decimal("1000000"))
             if shares_micro <= 0:
                 raise ValueError
         except Exception:
@@ -328,13 +274,11 @@ class _PositionDialog(ctk.CTkToplevel):
             )
             return
 
-        # Kaufkurs parsen (optional)
         price_str = self._price_entry.get().replace(",", ".").strip()
         buy_price_micro: int | None = None
         if price_str:
             try:
-                price_dec       = Decimal(price_str)
-                buy_price_micro = int(price_dec * Decimal("1000000"))
+                buy_price_micro = int(Decimal(price_str) * Decimal("1000000"))
                 if buy_price_micro < 0:
                     raise ValueError
             except Exception:
@@ -348,21 +292,15 @@ class _PositionDialog(ctk.CTkToplevel):
 
         if self._edit_mode:
             update_position(
-                isin=isin,
-                shares_micro=shares_micro,
+                isin=isin, shares_micro=shares_micro,
                 buy_price_micro=buy_price_micro,
-                currency=currency,
-                notes=notes,
-                db_path=DB_PATH,
+                currency=currency, notes=notes, db_path=DB_PATH,
             )
         else:
             ok = add_position(
-                isin=isin,
-                shares_micro=shares_micro,
+                isin=isin, shares_micro=shares_micro,
                 buy_price_micro=buy_price_micro,
-                currency=currency,
-                notes=notes,
-                db_path=DB_PATH,
+                currency=currency, notes=notes, db_path=DB_PATH,
             )
             if not ok:
                 self._error_label.configure(
@@ -378,7 +316,6 @@ class _PositionDialog(ctk.CTkToplevel):
 # ── Haupt-Tab ─────────────────────────────────────────────────────────────────
 
 class PortfolioTab(ctk.CTkFrame):
-    """Portfolio-Tab — persönlich gehaltene Positionen."""
 
     def __init__(self, master: Any, **kwargs: Any) -> None:
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -397,16 +334,12 @@ class PortfolioTab(ctk.CTkFrame):
         self.after(100, self._process_queue)
         self._start_load()
 
-    # ── Layout ────────────────────────────────────────────────────────────────
-
     def _build_toolbar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
 
-        ctk.CTkButton(
-            bar, text="↻  Aktualisieren", width=140,
-            command=self._refresh,
-        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bar, text="↻  Aktualisieren", width=140,
+                       command=self._refresh).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
             bar, text="＋  Position hinzufügen", width=180,
@@ -417,8 +350,7 @@ class PortfolioTab(ctk.CTkFrame):
 
         self._edit_btn = ctk.CTkButton(
             bar, text="✎  Bearbeiten", width=130,
-            state="disabled",
-            command=self._open_edit_dialog,
+            state="disabled", command=self._open_edit_dialog,
         )
         self._edit_btn.pack(side="left", padx=(0, 8))
 
@@ -426,8 +358,7 @@ class PortfolioTab(ctk.CTkFrame):
             bar, text="✕  Entfernen", width=130,
             fg_color=("firebrick3", "#8b0000"),
             hover_color=("firebrick4", "#6b0000"),
-            state="disabled",
-            command=self._remove_selected,
+            state="disabled", command=self._remove_selected,
         )
         self._remove_btn.pack(side="left", padx=(0, 8))
 
@@ -455,7 +386,6 @@ class PortfolioTab(ctk.CTkFrame):
         self._tree = ttk.Treeview(
             outer, columns=cols, show="headings", selectmode="browse",
         )
-
         self._tree.column("name",     width=260, anchor="w",      stretch=True)
         self._tree.column("isin_wkn", width=150, anchor="w",      stretch=False)
         self._tree.column("shares",   width=90,  anchor="e",      stretch=False)
@@ -479,7 +409,6 @@ class PortfolioTab(ctk.CTkFrame):
             style.theme_use("clam")
         except tk.TclError:
             pass
-
         style.configure(
             "Portfolio.Treeview",
             background=bg, foreground=fg,
@@ -510,22 +439,19 @@ class PortfolioTab(ctk.CTkFrame):
         self._tree.bind("<Double-1>",          self._on_double_click)
 
     def _build_summary_bar(self) -> None:
-        """Zeigt Gesamt-Investitionswert + geschätzten Jahresertrag."""
         bar = ctk.CTkFrame(self, fg_color=("gray88", "gray18"))
         bar.grid(row=3, column=0, sticky="ew", padx=8, pady=(6, 0))
         bar.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             bar, text="Gesamt:",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            anchor="w",
+            font=ctk.CTkFont(size=11, weight="bold"), anchor="w",
         ).grid(row=0, column=0, padx=(12, 8), pady=6, sticky="w")
 
         self._summary_label = ctk.CTkLabel(
             bar, text="—",
             font=ctk.CTkFont(size=11),
-            text_color=("gray40", "gray70"),
-            anchor="w",
+            text_color=("gray40", "gray70"), anchor="w",
         )
         self._summary_label.grid(row=0, column=1, padx=(0, 12), pady=6, sticky="w")
 
@@ -536,8 +462,6 @@ class PortfolioTab(ctk.CTkFrame):
         self._detail_panel = ScoreDetailPanel(self, height=160)
         self._detail_panel.grid(row=5, column=0, sticky="ew", padx=0, pady=0)
         self._detail_panel.grid_propagate(False)
-
-    # ── Datenladen ────────────────────────────────────────────────────────────
 
     def _start_load(self) -> None:
         threading.Thread(target=self._worker, daemon=True).start()
@@ -562,8 +486,6 @@ class PortfolioTab(ctk.CTkFrame):
             pass
         self.after(100, self._process_queue)
 
-    # ── Tabelle ───────────────────────────────────────────────────────────────
-
     def _populate(self, rows: list[tuple]) -> None:
         self._rows = rows
         self._tree.delete(*self._tree.get_children())
@@ -587,7 +509,6 @@ class PortfolioTab(ctk.CTkFrame):
                 tags=tags,
             )
 
-            # Gesamt-Jahresertrag summieren (nur wenn berechenbar)
             if buy_price_micro and annual_str != "—":
                 try:
                     val = annual_str.split()[0].replace(",", "")
@@ -603,7 +524,6 @@ class PortfolioTab(ctk.CTkFrame):
         self._edit_btn.configure(state="disabled")
         self._remove_btn.configure(state="disabled")
 
-        # Zusammenfassung
         if n == 0:
             self._summary_label.configure(text="Noch keine Positionen eingetragen.")
         elif len(currency_set) == 1:
@@ -616,8 +536,6 @@ class PortfolioTab(ctk.CTkFrame):
             self._summary_label.configure(
                 text="Jährlicher Ertrag: Mehrere Währungen — Einzelwerte in Tabelle."
             )
-
-    # ── Selektion ─────────────────────────────────────────────────────────────
 
     def _get_selected_isin(self) -> str | None:
         sel = self._tree.selection()
@@ -635,8 +553,6 @@ class PortfolioTab(ctk.CTkFrame):
         if self._tree.identify_region(event.x, event.y) == "cell":
             self._open_edit_dialog()
 
-    # ── Aktionen ──────────────────────────────────────────────────────────────
-
     def _open_add_dialog(self) -> None:
         _PositionDialog(self, on_saved=self._refresh)
 
@@ -647,15 +563,11 @@ class PortfolioTab(ctk.CTkFrame):
         row = next((r for r in self._rows if r[0] == isin), None)
         if not row:
             return
-        initial = {
-            "shares_micro":    row[10],
-            "buy_price_micro": row[11],
-            "currency":        row[12],
-            "notes":           row[13],
-        }
         _PositionDialog(
             self, isin=isin, edit_mode=True,
-            initial=initial, on_saved=self._refresh,
+            initial={"shares_micro": row[10], "buy_price_micro": row[11],
+                     "currency": row[12], "notes": row[13]},
+            on_saved=self._refresh,
         )
 
     def _remove_selected(self) -> None:

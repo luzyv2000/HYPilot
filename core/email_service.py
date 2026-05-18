@@ -1,11 +1,15 @@
 # Dateiname:     core/email_service.py
-# Version:       2026-04-23-P3pp
+# Version:       2026-05-16-freq
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): python-dotenv
 """
 core/email_service.py
 
 SMTP-E-Mail-Versand für HYPilot-Benachrichtigungen.
+
+Neu 2026-05-16:
+  Crossings-Tabelle enthält jetzt Spalte "Frequenz"
+  (monatlich, quartalsweise, etc.) aus dividend_data.frequency.
 
 Credentials ausschließlich via .env — niemals im Code.
 Unterstützt STARTTLS (Port 587) und SSL (Port 465).
@@ -26,6 +30,16 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
+
+# ── Frequenz-Anzeigenamen ─────────────────────────────────────────────────────
+
+_FREQ_DISPLAY: dict[str, str] = {
+    "monthly":     "monatlich",
+    "quarterly":   "quartalsweise",
+    "semi_annual": "halbjährlich",
+    "annual":      "jährlich",
+    "irregular":   "unregelmäßig",
+}
 
 
 def _get_recipients() -> list[str]:
@@ -119,16 +133,18 @@ def _build_body(
             new_pct = f"{c['yield_bps_new']/100:.2f}%"
             arrow   = "▲" if c["direction"] == "up" else "▼"
             color   = "#2e7d32" if c["direction"] == "up" else "#c62828"
+            freq    = _FREQ_DISPLAY.get(c.get("frequency") or "", "—")
             crossing_rows += f"""
             <tr>
               <td>{c['isin']}</td>
               <td>{c['display_name']}</td>
               <td>{old_pct}</td>
               <td style="color:{color};font-weight:bold">{arrow} {new_pct}</td>
+              <td>{freq}</td>
             </tr>"""
     else:
         crossing_rows = (
-            '<tr><td colspan="4" style="color:gray">'
+            '<tr><td colspan="5" style="color:gray">'
             'Keine Schwellwert-Überschreitungen</td></tr>'
         )
 
@@ -153,7 +169,7 @@ def _build_body(
            style="border-collapse:collapse">
       <tr>
         <th>ISIN</th><th>Name</th>
-        <th>Alt</th><th>Neu</th>
+        <th>Alt</th><th>Neu</th><th>Frequenz</th>
       </tr>
       {crossing_rows}
     </table>

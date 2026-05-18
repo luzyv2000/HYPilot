@@ -27,7 +27,7 @@ import logging
 import queue
 import sqlite3
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path

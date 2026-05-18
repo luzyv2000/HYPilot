@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from analysis.engine import UniverseEntry, score_instrument, universe_screen
+from analysis.engine import score_instrument, universe_screen
 
 
 # ─────────────────────────────────────────────────────────────────────────────

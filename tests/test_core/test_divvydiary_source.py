@@ -24,7 +24,6 @@ Abgedeckte Pfade:
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -228,7 +227,6 @@ class TestFrequencyDetection:
 
     def _make_payments(self, count: int) -> list[dict]:
         """Erzeugt `count` monatliche Zahlungen ab heute rückwärts."""
-        from datetime import timedelta
         today = date.today()
         return [
             {

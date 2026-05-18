@@ -30,7 +30,6 @@ import pytest
 import responses as resp
 
 from core.ticker_resolver import (
-    UNRESOLVABLE_TTL_DAYS,
     ResolveStatus,
     _apply_suffix,
     _get_preferred_exchanges,

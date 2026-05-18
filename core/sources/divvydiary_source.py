@@ -1,32 +1,10 @@
 # Dateiname:     core/sources/divvydiary_source.py
-# Version:       2026-05-08
+# Version:       2026-05-08-lint
 # Abhängigkeiten (intern): core.dividend_source
 # Abhängigkeiten (extern): requests, python-dotenv
 """
-core/sources/divvydiary_source.py
-
-DivvyDiary REST-API Adapter.
-
-API-Endpunkt:  https://api.divvydiary.com/symbols/{ISIN}
-Authentifikation: Bearer-Token via DIVVYDIARY_API_KEY in .env
-Rate-Limit Free Tier: ~100 Requests/Tag → 429 wird abgefangen,
-  Quelle überspringt bei 429 ohne Fehler.
-
-Antwortstruktur (vereinfacht):
-  {
-    "isin": "...",
-    "currency": "EUR",
-    "dividendYield": 0.055,          # Dezimalform
-    "payoutRatio": 0.65,
-    "dividends": [
-      {"exDate": "2025-03-15", "amount": 0.271, "frequency": "monthly"},
-      ...
-    ]
-  }
-
-HINWEIS: Endpunkt-URL und Feldnamen via DIVVYDIARY_BASE_URL in .env
-  überschreibbar — ermöglicht Anpassung ohne Code-Änderung falls API
-  sich ändert.
+core/sources/divvydiary_source.py  —  DivvyDiary REST-API Adapter.
+Fix 2026-05-16: Ungenutzte Imports datetime + Decimal entfernt.
 """
 
 from __future__ import annotations
@@ -34,12 +12,11 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import date, datetime
-from decimal import Decimal
+from datetime import date
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from pathlib import Path
 
 from core.dividend_source import (
     DividendPayment,
@@ -53,15 +30,14 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL    = os.getenv("DIVVYDIARY_BASE_URL", "https://api.divvydiary.com")
-_API_KEY     = os.getenv("DIVVYDIARY_API_KEY", "").strip()
-_TIMEOUT     = 10
-_DELAY       = 0.5          # Sekunden zwischen Requests (höfliches Crawling)
+_BASE_URL      = os.getenv("DIVVYDIARY_BASE_URL", "https://api.divvydiary.com")
+_API_KEY       = os.getenv("DIVVYDIARY_API_KEY", "").strip()
+_TIMEOUT       = 10
+_DELAY         = 0.5
 _HISTORY_YEARS = 3
 
 
 def _detect_frequency(payments: list[DividendPayment]) -> str | None:
-    """Leitet Frequenz aus Zahlungsanzahl im letzten Jahr ab."""
     if not payments:
         return None
     today = date.today()
@@ -96,11 +72,8 @@ class DivvyDiarySource(DividendSource):
             logger.debug("DivvyDiary: kein API-Key konfiguriert — übersprungen.")
             return None
 
-        url = f"{_BASE_URL}/symbols/{isin}"
-        headers = {
-            "Authorization": f"Bearer {_API_KEY}",
-            "Accept": "application/json",
-        }
+        url     = f"{_BASE_URL}/symbols/{isin}"
+        headers = {"Authorization": f"Bearer {_API_KEY}", "Accept": "application/json"}
 
         try:
             response = requests.get(url, headers=headers, timeout=_TIMEOUT)
@@ -109,17 +82,13 @@ class DivvyDiarySource(DividendSource):
             if response.status_code == 404:
                 logger.debug("DivvyDiary: kein Eintrag für %s.", isin)
                 return None
-
             if response.status_code == 429:
                 logger.warning(
                     "DivvyDiary: Rate-Limit erreicht — Quelle für diesen Lauf übersprungen."
                 )
                 return None
-
             if response.status_code != 200:
-                logger.warning(
-                    "DivvyDiary: HTTP %d für %s.", response.status_code, isin
-                )
+                logger.warning("DivvyDiary: HTTP %d für %s.", response.status_code, isin)
                 return None
 
             data = response.json()
@@ -131,22 +100,20 @@ class DivvyDiarySource(DividendSource):
             logger.exception("DivvyDiary: unerwarteter Fehler für %s.", isin)
             return None
 
-        # Daten extrahieren
-        raw_yield    = data.get("dividendYield")
-        raw_payout   = data.get("payoutRatio")
-        currency     = data.get("currency", "EUR")
+        raw_yield  = data.get("dividendYield")
+        raw_payout = data.get("payoutRatio")
+        currency   = data.get("currency", "EUR")
 
-        yield_bps   = float_to_bps(raw_yield)
-        payout_bps  = float_to_bps(raw_payout)
+        yield_bps  = float_to_bps(raw_yield)
+        payout_bps = float_to_bps(raw_payout)
 
-        # Letztes Ex-Datum + Betrag aus Dividenden-Liste
         history = self.fetch_history(isin, ticker)
 
         last_amount_micro: int | None = None
         last_ex_date:      date | None = None
 
         if history:
-            latest = max(history, key=lambda p: p.ex_date)
+            latest            = max(history, key=lambda p: p.ex_date)
             last_ex_date      = latest.ex_date
             last_amount_micro = latest.amount_micro
 
@@ -156,10 +123,7 @@ class DivvyDiarySource(DividendSource):
             logger.debug("DivvyDiary: keine verwertbaren Daten für %s.", isin)
             return None
 
-        logger.info(
-            "DivvyDiary: %s → %s bps, Frequenz %s",
-            isin, yield_bps, frequency,
-        )
+        logger.info("DivvyDiary: %s → %s bps, Frequenz %s", isin, yield_bps, frequency)
 
         return DividendSnapshot(
             isin=isin,
@@ -181,21 +145,15 @@ class DivvyDiarySource(DividendSource):
         if not _API_KEY:
             return []
 
-        url = f"{_BASE_URL}/symbols/{isin}"
-        headers = {
-            "Authorization": f"Bearer {_API_KEY}",
-            "Accept": "application/json",
-        }
+        url     = f"{_BASE_URL}/symbols/{isin}"
+        headers = {"Authorization": f"Bearer {_API_KEY}", "Accept": "application/json"}
 
         try:
             response = requests.get(url, headers=headers, timeout=_TIMEOUT)
             time.sleep(_DELAY)
-
             if response.status_code != 200:
                 return []
-
             data = response.json()
-
         except Exception:
             logger.debug("DivvyDiary: fetch_history fehlgeschlagen für %s.", isin)
             return []
@@ -230,9 +188,7 @@ class DivvyDiarySource(DividendSource):
                     data_source=self.source_name,
                 ))
             except (KeyError, ValueError, TypeError) as exc:
-                logger.debug(
-                    "DivvyDiary: Eintrag übersprungen für %s: %s", isin, exc
-                )
+                logger.debug("DivvyDiary: Eintrag übersprungen für %s: %s", isin, exc)
                 continue
 
         logger.info(
