@@ -1,12 +1,20 @@
 # Dateiname:     db/init_db.py
-# Version:       2026-05-15-portfolio
+# Version:       2026-05-17-sparplan
 # Abhängigkeiten (intern): keine
 # Abhängigkeiten (extern): keine (sqlite3 ist stdlib)
 """
 db/init_db.py
 
-Neu 2026-05-15: portfolio-Tabelle
-  (isin, shares_micro, buy_price_micro, currency, notes, added_at).
+Neu 2026-05-17: sparplan-Felder in instruments-Tabelle.
+  sparplan             : NULL = unbewertet, 'S' = Sparplan ja, 'N' = nein
+  sparplan_reviewed_at : Zeitpunkt der letzten Bewertung
+
+  Zyklus-Steuerung via metadata:
+    sparplan_cycle_start  : ISO-Timestamp Zyklusstart
+    sparplan_paused_until : ISO-Timestamp bis wann Popup pausiert (24h)
+
+Vorbereitet für zukünftige Flag-Erweiterungen:
+  flag-Spalte zeigt: S (Sparplan), ☆ (Aristokrat), ★ (König)
 """
 
 from __future__ import annotations
@@ -24,13 +32,15 @@ _TABLE_DDL: list[str] = [
 
     """
     CREATE TABLE IF NOT EXISTS instruments (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        name         TEXT NOT NULL,
-        isin         TEXT NOT NULL UNIQUE,
-        wkn          TEXT,
-        symbol       TEXT,
-        name_override TEXT,
-        created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        name                 TEXT NOT NULL,
+        isin                 TEXT NOT NULL UNIQUE,
+        wkn                  TEXT,
+        symbol               TEXT,
+        name_override        TEXT,
+        sparplan             TEXT,
+        sparplan_reviewed_at TIMESTAMP,
+        created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
 
@@ -124,7 +134,6 @@ _TABLE_DDL: list[str] = [
     )
     """,
 
-    # ── Watchlist ──────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS watchlist (
         isin       TEXT PRIMARY KEY
@@ -134,11 +143,6 @@ _TABLE_DDL: list[str] = [
     )
     """,
 
-    # ── Portfolio ──────────────────────────────────────────────────────────────
-    # shares_micro    : 1_000_000 = 1 Anteil (unterstützt Bruchteile)
-    # buy_price_micro : Kaufkurs pro Anteil in Micro-Units (optional)
-    # currency        : Kaufwährung (ISO 4217)
-    # notes           : Freitext (optional)
     """
     CREATE TABLE IF NOT EXISTS portfolio (
         isin             TEXT PRIMARY KEY
@@ -157,6 +161,9 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE instruments    ADD COLUMN name_override TEXT",
     "ALTER TABLE dividend_data  ADD COLUMN yield_bps_prev INTEGER",
     "ALTER TABLE dividend_data  ADD COLUMN skip_until DATE",
+    # 2026-05-17: Sparplan-Felder
+    "ALTER TABLE instruments    ADD COLUMN sparplan TEXT",
+    "ALTER TABLE instruments    ADD COLUMN sparplan_reviewed_at TIMESTAMP",
 ]
 
 _TICKER_MAPPING_CONSTRAINT_MIGRATION = """
@@ -191,6 +198,7 @@ COMMIT;
 _INDEX_DDL: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_instruments_isin    ON instruments(isin)",
     "CREATE INDEX IF NOT EXISTS idx_instruments_name    ON instruments(name)",
+    "CREATE INDEX IF NOT EXISTS idx_instruments_sparplan ON instruments(sparplan)",
     "CREATE INDEX IF NOT EXISTS idx_div_history_isin    ON dividend_history(isin)",
     "CREATE INDEX IF NOT EXISTS idx_div_history_date    ON dividend_history(ex_date)",
     "CREATE INDEX IF NOT EXISTS idx_ticker_mapping_tick ON ticker_mapping(ticker)",
