@@ -38,6 +38,7 @@
 │   ├── __init__.py
 │   ├── instrument_repository.py
 │   ├── portfolio_repository.py
+│   ├── sparplan_repository.py
 │   └── watchlist_repository.py
 ├── docs
 │   ├── 00 Vorlagen.txt
@@ -51,6 +52,7 @@
 │   ├── 2026 04 23 HYPilot - Auffälligkeiten.md
 │   ├── 2026 04 24 - Fehleranalyse 01.md
 │   ├── 2026 04 27 Fahrplan zur Weiterentwicklung.md
+│   ├── 2026-05-18_projektstruktur.txt
 │   ├── Exkurs_01.md
 │   ├── Exkurs_02.md
 │   ├── Exkurs_03.md
@@ -82,6 +84,7 @@
 │       ├── name_edit_dialog.py
 │       ├── pending_names_dialog.py
 │       ├── score_detail_panel.py
+│       ├── sparplan_popup.py
 │       └── threshold_crossing_popup.py
 ├── hypilot.py
 ├── .hypothesis
@@ -348,4 +351,4 @@
     ├── lib64 -> lib
     └── pyvenv.cfg
 
-140 directories, 209 files
+140 directories, 212 files
